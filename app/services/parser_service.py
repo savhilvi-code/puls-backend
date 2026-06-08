@@ -58,12 +58,16 @@ async def parse_diagnostic(router_json: dict) -> dict:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:
             response = await client.post(url, json=payload)
+            if response.status_code == 405:
+                response = await client.get(url, params=payload)
             response.raise_for_status()
             data = response.json()
     except httpx.HTTPStatusError as exc:
-        raise ParserUnavailableError(f"Parser failed with HTTP {exc.response.status_code}.") from exc
+        raise ParserUnavailableError(
+            f"Parser failed with HTTP {exc.response.status_code}."
+        ) from exc
     except httpx.RequestError as exc:
         raise ParserUnavailableError(f"Parser request failed: {exc}") from exc
     except ValueError as exc:
