@@ -1,5 +1,6 @@
 const AUTH_STATUS_READY = "Введите email и пароль.";
 const AUTH_STATUS_CONFIG = "Добавьте Supabase URL и anon key в assets/js/supabaseClient.js.";
+const CURRENT_EMAIL_KEY = "puls_current_email_v1";
 
 function getAuthElements() {
   return {
@@ -46,6 +47,7 @@ async function updateProfileBlock() {
     profileEmail.textContent = "Supabase не настроен";
     authBtn.style.display = "inline-flex";
     logoutBtn.style.display = "none";
+    localStorage.removeItem(CURRENT_EMAIL_KEY);
     return;
   }
 
@@ -57,11 +59,13 @@ async function updateProfileBlock() {
     profileEmail.textContent = "Войдите в аккаунт";
     authBtn.style.display = "inline-flex";
     logoutBtn.style.display = "none";
+    localStorage.removeItem(CURRENT_EMAIL_KEY);
     return;
   }
 
   name.textContent = user.user_metadata?.full_name || "Пользователь PULS";
   profileEmail.textContent = user.email || "Email не указан";
+  if (user.email) localStorage.setItem(CURRENT_EMAIL_KEY, user.email);
   authBtn.style.display = "none";
   logoutBtn.style.display = "inline-flex";
   await syncAuthUserProfile(user);
@@ -80,6 +84,10 @@ async function syncAuthUserProfile(user) {
   const { error } = await window.supabaseClient
     .from("users")
     .upsert(payload, { onConflict: "auth_user_id" });
+
+  if (!error && user.email) {
+    localStorage.setItem(CURRENT_EMAIL_KEY, user.email);
+  }
 
   if (!error) return;
 

@@ -1,5 +1,6 @@
-﻿const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
+const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
 const SPLINE_SCENE_URL = "";
+const CURRENT_EMAIL_KEY = "puls_current_email_v1";
 
     const iconMap = {
       bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 4v4M8 13h.01M16 13h.01M7 21h10M3 11v4M21 11v4"/></svg>',
@@ -282,17 +283,26 @@ const SPLINE_SCENE_URL = "";
     }
 
     async function getChatEmail() {
+      const cachedEmail = localStorage.getItem(CURRENT_EMAIL_KEY) || "";
+      if (cachedEmail.includes("@")) return cachedEmail;
+
       if (window.supabaseClient?.auth?.getUser) {
         try {
           const { data, error } = await window.supabaseClient.auth.getUser();
-          if (!error && data?.user?.email) return data.user.email;
+          if (!error && data?.user?.email) {
+            localStorage.setItem(CURRENT_EMAIL_KEY, data.user.email);
+            return data.user.email;
+          }
         } catch (error) {
           console.error("PULS auth lookup failed:", error);
         }
       }
 
       const profileEmail = document.getElementById("profileEmail")?.textContent?.trim() || "";
-      if (profileEmail.includes("@")) return profileEmail;
+      if (profileEmail.includes("@")) {
+        localStorage.setItem(CURRENT_EMAIL_KEY, profileEmail);
+        return profileEmail;
+      }
 
       return `${getWebUserId()}@web.local`;
     }

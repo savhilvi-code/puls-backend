@@ -98,6 +98,26 @@ def _looks_like_problem_text(text: str) -> bool:
     return any(token in lowered for token in keywords)
 
 
+def _looks_like_problem_text_extended(text: str) -> bool:
+    lowered = str(text or "").lower()
+    extra_keywords = [
+        "теряет тягу",
+        "потеря тяги",
+        "нет тяги",
+        "не тянет",
+        "тупит",
+        "дергается",
+        "провал",
+        "мощност",
+        "разгон",
+        "на прогретую",
+        "на горячую",
+        "на холодную",
+        "теряет мощность",
+    ]
+    return any(token in lowered for token in extra_keywords)
+
+
 def build_dialog_state(normalized, user: UserRecord, decision: RouterDecision) -> DialogState:
     current_text = str(normalized.text or "").strip()
     history = str(user.conversation_history or "")
@@ -140,7 +160,7 @@ def build_dialog_state(normalized, user: UserRecord, decision: RouterDecision) -
         and not is_greeting
         and not is_feedback_helped
         and not is_feedback_not_helped
-        and not _looks_like_problem_text(current_text)
+        and not (_looks_like_problem_text(current_text) or _looks_like_problem_text_extended(current_text))
     )
 
     return DialogState(
