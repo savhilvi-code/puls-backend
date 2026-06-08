@@ -103,6 +103,17 @@ def _has_diagnostic_intent(text: str) -> bool:
             "install",
             "service",
             "set up",
+            "will not move",
+            "won't move",
+            "does not move",
+            "doesn't move",
+            "not move",
+            "no movement",
+            "won't start",
+            "doesn't start",
+            "no power",
+            "loses power",
+            "won't go",
         )
     )
 
