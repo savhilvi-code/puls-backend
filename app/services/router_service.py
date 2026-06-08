@@ -119,8 +119,8 @@ def _local_router(text: str, language: str) -> RouterDecision:
     lowered = text.lower().strip()
     language = normalize_language_code(language)
 
-    positive = {"helped", "fixed", "solved", "works", "thanks"}
     negative = {"not helped", "did not help", "still", "deeper", "more details"}
+    positive = {"helped", "fixed", "solved", "works", "thanks"}
     greetings = {"hi", "hello", "hey", "привет", "здравствуйте", "здравствуй"}
 
     if _is_greeting(lowered):
@@ -140,23 +140,6 @@ def _local_router(text: str, language: str) -> RouterDecision:
             response="Hi! Describe the car issue and I'll help.",
         )
 
-    if any(token in lowered for token in positive):
-        return RouterDecision(
-            message_type="helped_feedback",
-            language=language,
-            need_car_info=False,
-            need_clarification=False,
-            ready_to_search=False,
-            deep_search=False,
-            user_says_helped=True,
-            user_says_not_helped=False,
-            question="",
-            car_info="",
-            active_car="",
-            symptom="",
-            response="Glad it helped.",
-        )
-
     if any(token in lowered for token in negative):
         return RouterDecision(
             message_type="followup_deep",
@@ -172,6 +155,23 @@ def _local_router(text: str, language: str) -> RouterDecision:
             active_car="",
             symptom=text[:120],
             response="Let's dig deeper.",
+        )
+
+    if any(token in lowered for token in positive):
+        return RouterDecision(
+            message_type="helped_feedback",
+            language=language,
+            need_car_info=False,
+            need_clarification=False,
+            ready_to_search=False,
+            deep_search=False,
+            user_says_helped=True,
+            user_says_not_helped=False,
+            question="",
+            car_info="",
+            active_car="",
+            symptom="",
+            response="Glad it helped.",
         )
 
     need_car_info = not bool(text)
@@ -239,17 +239,6 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
             }
         )
 
-    if has_helped:
-        return decision.model_copy(
-            update={
-                "message_type": "helped_feedback",
-                "need_car_info": False,
-                "ready_to_search": False,
-                "deep_search": False,
-                "response": decision.response or "Glad it helped.",
-            }
-        )
-
     if has_deep:
         return decision.model_copy(
             update={
@@ -258,6 +247,17 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
                 "ready_to_search": True,
                 "deep_search": True,
                 "response": decision.response or "Let's dig deeper.",
+            }
+        )
+
+    if has_helped:
+        return decision.model_copy(
+            update={
+                "message_type": "helped_feedback",
+                "need_car_info": False,
+                "ready_to_search": False,
+                "deep_search": False,
+                "response": decision.response or "Glad it helped.",
             }
         )
 
