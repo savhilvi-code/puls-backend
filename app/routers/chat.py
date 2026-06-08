@@ -256,6 +256,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 active_car=state.active_car,
                 symptom=state.current_symptom,
                 message_type="kb_match",
+                links=matched_case_links,
             )
             return ChatResponse(answer=answer_text, links=matched_case_links)
 

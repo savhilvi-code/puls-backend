@@ -42,6 +42,67 @@ def _contains_any(haystack: str, needle: str) -> bool:
     return bool(need) and need in hay
 
 
+def _normalize_link_item(item: dict) -> dict:
+    return {
+        "title": str(item.get("title") or item.get("forum") or item.get("name") or item.get("source") or ""),
+        "url": str(item.get("url") or item.get("link") or ""),
+        "description": str(item.get("description") or item.get("key_info") or item.get("summary") or ""),
+        "type": str(item.get("type") or ("video" if any(domain in str(item.get("url") or "").lower() for domain in ("youtube.com", "youtu.be", "rutube.ru", "vimeo.com")) else "link")),
+    }
+
+
+def _normalize_links(raw_links) -> list[dict]:
+    if isinstance(raw_links, dict):
+        raw_links = raw_links.get("links") or raw_links.get("forum_links") or raw_links.get("items") or []
+    if not isinstance(raw_links, list):
+        return []
+
+    normalized: list[dict] = []
+    seen: set[str] = set()
+    for item in raw_links:
+        if not isinstance(item, dict):
+            continue
+        normalized_item = _normalize_link_item(item)
+        url = normalized_item.get("url") or ""
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        normalized.append(normalized_item)
+    return normalized
+
+
+def _row_links(row: dict) -> list[dict]:
+    links = _normalize_links(row.get("forum_links") or [])
+    if links:
+        return links
+    raw_payload = row.get("raw_payload") or {}
+    if isinstance(raw_payload, dict):
+        links = _normalize_links(raw_payload.get("links") or raw_payload.get("forum_links") or [])
+        if links:
+            return links
+        topics = raw_payload.get("topics_found") or raw_payload.get("topics") or []
+        if isinstance(topics, list):
+            normalized: list[dict] = []
+            for item in topics:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                title = str(item.get("title") or item.get("forum") or "").strip()
+                if not url and not title:
+                    continue
+                normalized.append(
+                    {
+                        "title": title or url,
+                        "url": url,
+                        "description": str(item.get("key_info") or item.get("description") or ""),
+                        "type": "video" if any(domain in url.lower() for domain in ("youtube.com", "youtu.be", "rutube.ru", "vimeo.com")) else "link",
+                    }
+                )
+            if normalized:
+                return normalized
+    return []
+
+
 def _is_placeholder_case(row: dict) -> bool:
     text = " ".join(
         [
@@ -87,6 +148,8 @@ def _score_case(row: dict, *, active_car: str, symptom: str, language: str, prev
             str(row.get("symptom_description") or ""),
             confirmed_cause,
             recommended_action,
+            str(row.get("full_answer") or ""),
+            str(row.get("raw_payload") or ""),
             str(row.get("country") or ""),
         ]
     ).lower()
@@ -115,7 +178,7 @@ async def find_matching_case(state, decision):
     try:
         client = get_supabase_client()
         response = client.table("knowledge_cases").select(
-            "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence"
+            "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence,full_answer,raw_payload,forum_links"
         ).order("success_count", desc=True).limit(100).execute()
         rows = getattr(response, "data", []) or []
     except SupabaseUnavailableError as exc:
@@ -152,18 +215,19 @@ async def find_matching_case(state, decision):
     if best_score < 4:
         return None
 
-    answer = str(row.get("recommended_action") or row.get("confirmed_cause") or "").strip()
+    answer = str(row.get("full_answer") or row.get("recommended_action") or row.get("confirmed_cause") or "").strip()
     if not answer:
         return None
+    links = _row_links(row)
     formatted = format_from_kb(
         language=state.language,
         answer=answer,
-        links=[],
+        links=links,
     )
     return {
         "id": row.get("id"),
         "answer": answer,
-        "links": [],
+        "links": links,
         "formatted_answer": formatted,
         "row": row,
     }
@@ -216,6 +280,7 @@ async def find_matching_history_case(*, history: str, active_car: str, symptom: 
                 fields.get("user", ""),
                 fields.get("assistant", ""),
                 fields.get("active_car", ""),
+                fields.get("full_answer", ""),
             ]
         )
         haystack = _normalize_text(text_parts)
@@ -256,6 +321,8 @@ async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
     extracted_cases = parsed_case.get("extracted_cases") or []
     first_case = extracted_cases[0] if extracted_cases else {}
     parser_summary = str(parsed_case.get("parser_summary") or "")
+    links = _normalize_links(parsed_case.get("links") or [])
+    raw_payload = parsed_case.get("_raw") if isinstance(parsed_case.get("_raw"), dict) else parsed_case.get("_raw")
     if not parser_summary.strip() and not extracted_cases:
         return None
     if _is_placeholder_case(
@@ -273,6 +340,9 @@ async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
         "symptom_description": normalized.text,
         "confirmed_cause": str(first_case.get("cause") or parser_summary or ""),
         "recommended_action": str(first_case.get("solution") or parser_summary or ""),
+        "full_answer": parser_summary,
+        "raw_payload": raw_payload,
+        "forum_links": links,
         "country": normalized.language,
         "source_type": "parser",
         "success_count": 0,
@@ -308,7 +378,7 @@ async def find_latest_case_for_feedback(state) -> dict | None:
     try:
         client = get_supabase_client()
         response = client.table("knowledge_cases").select(
-            "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence"
+            "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence,full_answer,raw_payload,forum_links"
         ).order("id", desc=True).limit(200).execute()
         rows = getattr(response, "data", []) or []
     except SupabaseUnavailableError as exc:
@@ -329,6 +399,7 @@ async def find_latest_case_for_feedback(state) -> dict | None:
                 str(row.get("symptom_description") or ""),
                 str(row.get("confirmed_cause") or ""),
                 str(row.get("recommended_action") or ""),
+                str(row.get("full_answer") or ""),
             ]
         )
         if symptom and not _contains_any(haystack, symptom):
