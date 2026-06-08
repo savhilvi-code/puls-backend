@@ -209,7 +209,27 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 }
             )
         except ParserUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            answer_text = _generic_diagnostic_fallback(
+                language=state.language,
+                active_car=state.active_car,
+                symptom=effective_symptom,
+            )
+            answer_text += (
+                "\n\nDid this solve the problem? If not, write 'not helped' and I will run a deeper search."
+                if state.language != "ru"
+                else "\n\nЭто временный ответ, потому что глубокий поиск сейчас недоступен. Если не помогло, напишите 'не помогло', и я попробую снова."
+            )
+            await update_user_after_response(
+                user,
+                normalized,
+                answer_text,
+                should_decrease_limit=True,
+                active_car=state.active_car,
+                symptom=effective_symptom,
+                message_type="parser_fallback",
+                links=[],
+            )
+            return ChatResponse(answer=answer_text, links=[])
 
         await save_knowledge_case(parser_input, decision, parsed_case)
 
