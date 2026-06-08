@@ -1,4 +1,4 @@
-﻿const N8N_WEBHOOK_URL = "https://auto-diagnost.app.n8n.cloud/webhook/a8c9c31d-1ae8-4bea-aae3-fbc30909bca3";
+﻿const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
 const SPLINE_SCENE_URL = "";
 
     const iconMap = {
@@ -281,6 +281,21 @@ const SPLINE_SCENE_URL = "";
       return userId;
     }
 
+    async function getChatEmail() {
+      if (window.supabaseClient?.auth?.getUser) {
+        try {
+          const { data, error } = await window.supabaseClient.auth.getUser();
+          if (!error && data?.user?.email) return data.user.email;
+        } catch (error) {
+          console.error("PULS auth lookup failed:", error);
+        }
+      }
+
+      const profileEmail = document.getElementById("profileEmail")?.textContent?.trim() || "";
+      if (profileEmail.includes("@")) return profileEmail;
+
+      return `${getWebUserId()}@web.local`;
+    }
     function loadLocalHistory() {
       try {
         return JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
@@ -347,27 +362,15 @@ const SPLINE_SCENE_URL = "";
 
       const loading = appendMessage("PULS анализирует запрос...", false);
       try {
+        const email = await getChatEmail();
         const res = await fetch(N8N_WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: prompt,
-            text: prompt,
-            prompt,
             source: "web",
-            userId: getWebUserId(),
-            user_id: getWebUserId(),
-            raw_user_id: getWebUserId(),
-            chat_id: getWebUserId(),
-            username: "web_user",
-            first_name: "Web",
-            vehicle: {
-              model: "",
-              year: "",
-              engine: "",
-              drive: "",
-              fuel: ""
-            }
+            email,
+            language: "ru"
           })
         });
 
@@ -390,7 +393,10 @@ const SPLINE_SCENE_URL = "";
         await renderLists();
         scrollMessagesToBottom();
       } catch (error) {
-        const errorText = "Не получилось получить ответ от n8n. Проверьте URL webhook, CORS и Respond to Webhook node.";
+        console.error("PULS /chat request failed:", error);
+        const errorText = error?.message
+          ? `Сервис временно недоступен. ${error.message}`
+          : "Сервис временно недоступен. Попробуйте еще раз.";
         loading.innerHTML = `<strong>PULS</strong><br>${errorText} <small>${new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</small>`;
         updateKeyChecks(errorText);
         await saveHistoryItem(prompt, errorText);
@@ -447,6 +453,7 @@ const SPLINE_SCENE_URL = "";
         }
       });
     });
+
 
 
 
