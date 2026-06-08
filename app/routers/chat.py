@@ -17,6 +17,32 @@ def _contains_any_phrase(text: str, phrases: set[str]) -> bool:
     return any(phrase in lowered for phrase in phrases if phrase)
 
 
+def _normalize_phrase(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _build_parser_history_context(history: str, *, symptom: str, active_car: str, max_blocks: int = 2) -> str:
+    blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
+    if not blocks:
+        return ""
+
+    needles = [_normalize_phrase(symptom), _normalize_phrase(active_car)]
+    selected: list[str] = []
+
+    for block in reversed(blocks):
+        haystack = _normalize_phrase(block)
+        if any(needle and needle in haystack for needle in needles):
+            selected.append(block)
+        if len(selected) >= max_blocks:
+            break
+
+    if not selected:
+        selected = blocks[-max_blocks:]
+
+    selected.reverse()
+    return "\n---\n".join(selected)[:4000]
+
+
 def _greeting_text(language: str, assistant_hint: str = "") -> str:
     if assistant_hint:
         return assistant_hint
@@ -198,12 +224,17 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
         parser_input = normalized.model_copy(update={"text": effective_symptom})
         try:
+            parser_history = _build_parser_history_context(
+                user.conversation_history or "",
+                symptom=effective_symptom,
+                active_car=state.active_car or normalized.car_info or user.car_info,
+            )
             parsed_case = await parse_diagnostic(
                 {
                     "active_car": state.active_car or normalized.car_info or user.car_info,
                     "symptom": effective_symptom,
                     "query": effective_symptom,
-                    "conversation_history": user.conversation_history or "",
+                    "conversation_history": parser_history,
                     "deep_search": bool(state.should_deep_search),
                     "language": state.language or normalized.language,
                 }
