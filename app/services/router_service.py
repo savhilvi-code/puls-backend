@@ -87,13 +87,12 @@ def _has_diagnostic_intent(text: str) -> bool:
             "заменить",
             "поменять",
             "починить",
-            "прикуриватель",
             "turbo",
             "stall",
             "stalls",
             "loss of power",
         )
-    ) or "?" in lowered
+    )
 
 
 def _is_greeting(text: str) -> bool:

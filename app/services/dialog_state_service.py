@@ -71,13 +71,12 @@ def _looks_like_diagnostic_intent(text: str) -> bool:
             'заменить',
             'поменять',
             'починить',
-            'прикуриватель',
             'turbo',
             'stall',
             'stalls',
             'loss of power',
         )
-    ) or '?' in lowered
+    )
 
 
 def _looks_like_greeting(text: str) -> bool:
