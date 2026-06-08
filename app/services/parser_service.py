@@ -5,12 +5,16 @@ from typing import Any
 import httpx
 
 
+DEFAULT_PARSER_API_URL = "https://car-diagnostic-api.onrender.com/search"
+
+
 class ParserUnavailableError(RuntimeError):
     pass
 
 
 def _parser_url() -> str:
-    return str(os.getenv("PARSER_API_URL", "") or "").strip()
+    url = str(os.getenv("PARSER_API_URL", "") or "").strip()
+    return url or DEFAULT_PARSER_API_URL
 
 
 def _resolve_parser_endpoint(url: str) -> str:
