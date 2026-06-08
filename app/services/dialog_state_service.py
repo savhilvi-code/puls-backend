@@ -217,16 +217,20 @@ def build_dialog_state(normalized, user: UserRecord, decision: RouterDecision) -
     is_feedback_not_helped = _looks_like_not_helped(current_text) or decision.message_type == "followup_deep" or decision.user_says_not_helped
     is_continuation = bool(history_active_car or history_symptom) and not is_greeting
 
+    has_clear_diagnostic_intent = bool(
+        _looks_like_problem_text(current_text)
+        or _looks_like_problem_text_extended(current_text)
+        or _looks_like_diagnostic_intent(current_text)
+    )
+
     needs_car_clarification = bool(
         (decision.need_car_info or decision.need_clarification)
         and not active_car
         and not is_greeting
         and not is_feedback_helped
         and not is_feedback_not_helped
+        and not has_clear_diagnostic_intent
     )
-
-    if not active_car and not is_greeting and not is_feedback_helped and not is_feedback_not_helped:
-        needs_car_clarification = not bool(history_active_car)
 
     should_search = decision.message_type in {"new_diagnostic", "followup", "followup_deep"} and decision.ready_to_search
     should_deep_search = decision.deep_search or decision.message_type == "followup_deep" or is_feedback_not_helped
@@ -239,11 +243,7 @@ def build_dialog_state(normalized, user: UserRecord, decision: RouterDecision) -
         and not is_greeting
         and not is_feedback_helped
         and not is_feedback_not_helped
-        and not (
-            _looks_like_problem_text(current_text)
-            or _looks_like_problem_text_extended(current_text)
-            or _looks_like_diagnostic_intent(current_text)
-        )
+        and not has_clear_diagnostic_intent
     )
 
     return DialogState(
