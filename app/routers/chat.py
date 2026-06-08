@@ -12,6 +12,11 @@ from app.services.user_service import get_or_create_user, update_user_after_resp
 router = APIRouter(tags=["chat"])
 
 
+def _contains_any_phrase(text: str, phrases: set[str]) -> bool:
+    lowered = str(text or "").lower()
+    return any(phrase in lowered for phrase in phrases if phrase)
+
+
 def _greeting_text(language: str, assistant_hint: str = "") -> str:
     if assistant_hint:
         return assistant_hint
@@ -151,12 +156,22 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
     matched_case = await find_matching_case(state, decision)
     matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
     matched_case_links = (matched_case or {}).get("links", [])
-    matched_case_is_placeholder = matched_case_answer.lower() in {
-        "??????????? ?? ???????",
-        "diagnosis not found",
-        "no data",
-        "??? ??????",
-    }
+    matched_case_is_placeholder = _contains_any_phrase(
+        matched_case_answer,
+        {
+            "диагностика не найдена",
+            "нет данных",
+            "я готов помочь, но мне не хватает информации",
+            "мне не хватает информации",
+            "не вижу описания проблемы",
+            "не вижу описания симптома",
+            "опишите проблему",
+            "please describe",
+            "i need more information",
+            "i need more info",
+            "need more information",
+        },
+    )
     if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
         answer_text = format_from_kb(
             language=state.language,
@@ -200,12 +215,19 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             less_likely = probable_causes[2:]
             probable_causes = probable_causes[:2]
         response_links = parsed_case.get("links") or []
-        parser_placeholder = diagnosis_text.lower().strip() in {
-            "??????????? ?? ???????",
-            "diagnosis not found",
-            "no data",
-            "??? ??????",
-        }
+        parser_placeholder = _contains_any_phrase(
+            diagnosis_text,
+            {
+                "диагностика не найдена",
+                "нет данных",
+                "я готов помочь, но мне не хватает информации",
+                "мне не хватает информации",
+                "diagnosis not found",
+                "no data",
+                "need more information",
+                "i need more info",
+            },
+        )
 
         if diagnosis_text and not parser_placeholder:
             answer_text = format_technical_answer(
