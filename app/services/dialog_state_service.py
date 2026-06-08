@@ -55,7 +55,38 @@ def _looks_like_greeting(text: str) -> bool:
         "доброе утро",
         "добрый вечер",
     }
-    return lowered in greetings or any(lowered.startswith(token + " ") for token in greetings)
+    if lowered in greetings:
+        return True
+    if any(lowered == f"{token}!" or lowered == f"{token}." or lowered == f"{token}?" for token in greetings):
+        return True
+    if any(lowered.startswith(token + " ") for token in greetings):
+        rest = lowered.split(" ", 1)[1].strip()
+        if any(
+            token in rest
+            for token in (
+                "как",
+                "что",
+                "почему",
+                "помоги",
+                "помогите",
+                "заменить",
+                "поменять",
+                "устранить",
+                "проверить",
+                "диагностика",
+                "диагностировать",
+                "не заводится",
+                "теряет тягу",
+                "не тянет",
+                "глохнет",
+                "стучит",
+                "свистит",
+                "дымит",
+            )
+        ):
+            return False
+        return len(rest) <= 20
+    return False
 
 
 def _looks_like_helped(text: str) -> bool:

@@ -1,5 +1,5 @@
-﻿const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
-const SPLINE_SCENE_URL = "";
+const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
+const HISTORY_API_URL = "https://puls-backend-t3sn.onrender.com/api/history";`r`nconst SPLINE_SCENE_URL = "";
 const CURRENT_EMAIL_KEY = "puls_current_email_v1";
 
     const iconMap = {
