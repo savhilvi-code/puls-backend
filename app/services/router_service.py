@@ -59,9 +59,60 @@ def _has_feedback_deep(text: str) -> bool:
     return _contains_any(text, _FEEDBACK_DEEP)
 
 
+def _has_diagnostic_intent(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        token in lowered
+        for token in (
+            "как заменить",
+            "как поменять",
+            "как снять",
+            "как починить",
+            "почему",
+            "не работает",
+            "не заводится",
+            "теряет тягу",
+            "нет тяги",
+            "тупит",
+            "дергается",
+            "стучит",
+            "свистит",
+            "дымит",
+            "горит",
+            "шум",
+            "ошибк",
+            "диагност",
+            "ремонт",
+            "проверить",
+            "устранить",
+            "заменить",
+            "поменять",
+            "починить",
+            "прикуриватель",
+            "engine",
+            "turbo",
+            "stall",
+            "stalls",
+            "loss of power",
+        )
+    ) or "?" in lowered
+
+
 def _is_greeting(text: str) -> bool:
     lowered = str(text or "").strip().lower()
-    return lowered in _GREETINGS or any(lowered.startswith(token + " ") for token in _GREETINGS)
+    if lowered in _GREETINGS:
+        return True
+    for token in _GREETINGS:
+        if not lowered.startswith(token + " "):
+            continue
+        rest = lowered[len(token):].strip(" \t\n\r,.:;!?")
+        if not rest:
+            return True
+        if _has_diagnostic_intent(rest):
+            return False
+        if len(rest) <= 18:
+            return True
+    return False
 
 
 def _local_router(text: str, language: str) -> RouterDecision:
@@ -72,7 +123,7 @@ def _local_router(text: str, language: str) -> RouterDecision:
     negative = {"not helped", "did not help", "still", "deeper", "more details"}
     greetings = {"hi", "hello", "hey", "привет", "здравствуйте", "здравствуй"}
 
-    if lowered in greetings or lowered.startswith(tuple(greetings)):
+    if _is_greeting(lowered):
         return RouterDecision(
             message_type="general",
             language=language,
@@ -163,11 +214,22 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
     lowered = str(text or "").strip().lower()
     has_car = _has_car_hint(lowered)
     has_problem = _has_problem_hint(lowered)
+    has_diagnostic_intent = _has_diagnostic_intent(lowered)
     has_helped = _has_feedback_helped(lowered)
     has_deep = _has_feedback_deep(lowered)
     is_greeting = _is_greeting(lowered)
 
     if is_greeting:
+        if has_diagnostic_intent or has_problem or has_car:
+            return decision.model_copy(
+                update={
+                    "message_type": "new_diagnostic",
+                    "need_car_info": False,
+                    "need_clarification": False,
+                    "ready_to_search": True,
+                    "deep_search": False,
+                }
+            )
         return decision.model_copy(
             update={
                 "message_type": "general",
@@ -200,6 +262,17 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
         )
 
     if has_car and has_problem and decision.message_type in {"general", "clarification"}:
+        return decision.model_copy(
+            update={
+                "message_type": "new_diagnostic",
+                "need_car_info": False,
+                "need_clarification": False,
+                "ready_to_search": True,
+                "deep_search": False,
+            }
+        )
+
+    if has_diagnostic_intent and decision.message_type in {"general", "clarification"}:
         return decision.model_copy(
             update={
                 "message_type": "new_diagnostic",

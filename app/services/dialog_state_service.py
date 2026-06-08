@@ -42,48 +42,65 @@ def _extract_last_block_value(history: str, key: str) -> str:
     return ""
 
 
+def _looks_like_diagnostic_intent(text: str) -> bool:
+    lowered = str(text or '').strip().lower()
+    return any(
+        token in lowered
+        for token in (
+            'как заменить',
+            'как поменять',
+            'как снять',
+            'как починить',
+            'почему',
+            'не работает',
+            'не заводится',
+            'теряет тягу',
+            'нет тяги',
+            'тупит',
+            'дергается',
+            'стучит',
+            'свистит',
+            'дымит',
+            'горит',
+            'шум',
+            'ошибк',
+            'диагност',
+            'ремонт',
+            'проверить',
+            'устранить',
+            'заменить',
+            'поменять',
+            'починить',
+            'прикуриватель',
+            'engine',
+            'turbo',
+            'stall',
+            'stalls',
+            'loss of power',
+        )
+    ) or '?' in lowered
+
+
 def _looks_like_greeting(text: str) -> bool:
-    lowered = str(text or "").strip().lower()
+    lowered = str(text or '').strip().lower()
     greetings = {
-        "hi",
-        "hello",
-        "hey",
-        "привет",
-        "здравствуй",
-        "здравствуйте",
-        "добрый день",
-        "доброе утро",
-        "добрый вечер",
+        'hi',
+        'hello',
+        'hey',
+        'привет',
+        'здравствуй',
+        'здравствуйте',
+        'добрый день',
+        'доброе утро',
+        'добрый вечер',
     }
     if lowered in greetings:
         return True
-    if any(lowered == f"{token}!" or lowered == f"{token}." or lowered == f"{token}?" for token in greetings):
+    if any(lowered == f'{token}!' or lowered == f'{token}.' or lowered == f'{token}?' for token in greetings):
         return True
-    if any(lowered.startswith(token + " ") for token in greetings):
-        rest = lowered.split(" ", 1)[1].strip()
-        if any(
-            token in rest
-            for token in (
-                "как",
-                "что",
-                "почему",
-                "помоги",
-                "помогите",
-                "заменить",
-                "поменять",
-                "устранить",
-                "проверить",
-                "диагностика",
-                "диагностировать",
-                "не заводится",
-                "теряет тягу",
-                "не тянет",
-                "глохнет",
-                "стучит",
-                "свистит",
-                "дымит",
-            )
-        ):
+    if any(lowered.startswith(token + ' ') for token in greetings):
+        rest = lowered.split(' ', 1)[1].strip(' \\t\\n\\r,.:;!?')
+        if _looks_like_diagnostic_intent(rest):
             return False
         return len(rest) <= 20
     return False

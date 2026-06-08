@@ -18,6 +18,7 @@ Return a compact JSON object with:
 
 Keep the response in the user's language.
 If the user is greeting or small talk, classify as general.
+If the user starts with a greeting but continues with a car problem, repair question, or diagnostic intent, classify as new_diagnostic, not general.
 If the user says helped/fixed/works, classify as helped_feedback.
 If the user says not helped or needs deeper search, classify as followup_deep.
 If the user asks about a car problem, classify as new_diagnostic.
@@ -29,5 +30,6 @@ For new_diagnostic and followup_deep, response can be empty.
 
 Examples:
 - "Привет" -> general with a short greeting response.
+- "Привет, как заменить прикуриватель на машине" -> new_diagnostic.
 - "Nissan Xtrail 2003 плохо заводится на холодную" -> new_diagnostic.
 - "не помогло, ищи глубже" -> followup_deep.
