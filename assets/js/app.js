@@ -1,4 +1,4 @@
-const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
+﻿const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
 const SPLINE_SCENE_URL = "";
 const CURRENT_EMAIL_KEY = "puls_current_email_v1";
 
@@ -268,6 +268,156 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
       `).join("");
     }
 
+    function normalizeHistoryRecord(item, index = 0) {
+      if (Array.isArray(item)) {
+        return {
+          id: `${index}-${item[0] || "item"}`,
+          question: item[0] || "",
+          answer: item[1] || "",
+          date: item[2] || "",
+          status: item[3] || "Сохранено",
+          vehicle: item[4] || "Укажите машину",
+          type: item[5] || "Текстовый запрос",
+          source: item[6] || "web"
+        };
+      }
+
+      return {
+        id: item?.id || `${index}-${item?.question || "item"}`,
+        question: item?.question || "",
+        answer: item?.answer || "",
+        date: item?.date || item?.created_at || "",
+        status: item?.status || "Сохранено",
+        vehicle: item?.vehicle || item?.car || "Укажите машину",
+        type: item?.type || item?.message_type || "Текстовый запрос",
+        source: item?.source || "web"
+      };
+    }
+
+    function openHistoryModal(record) {
+      const modal = $("#historyModal");
+      if (!modal || !record) return;
+
+      $("#historyModalTitle").textContent = record.question || "История запроса";
+      $("#historyModalMeta").textContent = [
+        record.date ? `Дата: ${record.date}` : "",
+        record.vehicle ? `Авто: ${record.vehicle}` : "",
+        record.type ? `Тип: ${record.type}` : "",
+        record.status ? `Статус: ${record.status}` : ""
+      ].filter(Boolean).join(" • ") || "Детали запроса PULS";
+      $("#historyModalQuestion").textContent = record.question || "Нет вопроса";
+      $("#historyModalAnswer").innerHTML = linkifyText(record.answer || "Ответ не сохранён.");
+
+      const links = extractLinks(record.answer || "");
+      const linksBox = $("#historyModalLinks");
+      if (linksBox) {
+        if (!links.length) {
+          linksBox.innerHTML = `<p>Ссылки по этому запросу не сохранены.</p>`;
+        } else {
+          linksBox.innerHTML = links.slice(0, 10).map((item) => `
+            <div class="topic-link-item">
+              <div class="topic-link-title">${item.isVideo ? "Видео: " : ""}${escapeHtml(item.title)}</div>
+              <div>${escapeHtml(item.source)}</div>
+              <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.url)}</a>
+            </div>
+          `).join("");
+        }
+      }
+
+      modal.classList.add("show");
+      modal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeHistoryModal() {
+      const modal = $("#historyModal");
+      if (!modal) return;
+      modal.classList.remove("show");
+      modal.setAttribute("aria-hidden", "true");
+    }
+
+    function renderHistoryRows(targetSelector, rows, extraRows = []) {
+      const list = $(targetSelector);
+      if (!list) return;
+
+      const normalizedRows = rows.concat(extraRows).map((item, index) => normalizeHistoryRecord(item, index));
+      list.innerHTML = normalizedRows.map((item, index) => `
+        <article class="row history-clickable" data-history-index="${index}" data-history-target="${targetSelector}">
+          <div class="thumb" aria-hidden="true"></div>
+          <div>
+            <h3>${escapeHtml(item.question)}</h3>
+            <span class="tag">${escapeHtml(item.vehicle || "Укажите машину")}</span>
+            <p>${escapeHtml(item.answer).slice(0, 220)}${String(item.answer).length > 220 ? "..." : ""}</p>
+          </div>
+          <div><p>${escapeHtml(item.date)}</p><p class="ok">${escapeHtml(item.status)} ✓</p></div>
+        </article>
+      `).join("");
+
+      list.dataset.historyRows = encodeURIComponent(JSON.stringify(normalizedRows));
+    }
+
+    function buildJournalRecords() {
+      const savedHistory = loadLocalHistory();
+      const savedRows = savedHistory.map((item, index) => normalizeHistoryRecord(item, index));
+      const baseRows = requests.map((item, index) => normalizeHistoryRecord({
+        id: `demo-journal-${index}`,
+        question: item[0],
+        answer: item[1],
+        date: item[2],
+        status: item[3],
+        vehicle: "Укажите машину",
+        type: "Демо",
+        source: "demo"
+      }, index + savedRows.length));
+      return savedRows.concat(baseRows);
+    }
+
+    function buildHistoryRecords() {
+      const journalRows = buildJournalRecords();
+      return journalRows.concat([normalizeHistoryRecord({
+        id: "demo-history-p0171",
+        question: "Ошибка P0171 слишком бедная смесь",
+        answer: "Укажите машину • Укажите мотор • Укажите топливо",
+        date: "28 апр., 20:33",
+        status: "Код ошибки",
+        vehicle: "Укажите машину",
+        type: "Код ошибки",
+        source: "demo"
+      }, journalRows.length)]);
+    }
+
+    function attachHistoryRowHandlers() {
+      const journalRows = buildJournalRecords();
+      const historyRows = buildHistoryRecords();
+      const pairs = [
+        ["#journalList", journalRows],
+        ["#historyList", historyRows]
+      ];
+
+      pairs.forEach(([selector, records]) => {
+        const list = $(selector);
+        if (!list) return;
+
+        list.querySelectorAll(".row").forEach((row, index) => {
+          const record = records[index];
+          if (!record) return;
+          row.classList.add("history-clickable");
+          row.setAttribute("role", "button");
+          row.setAttribute("tabindex", "0");
+          row.dataset.historyIndex = String(index);
+          row.dataset.historyTarget = selector;
+
+          const open = () => openHistoryModal(record);
+          row.onclick = open;
+          row.onkeydown = (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              open();
+            }
+          };
+        });
+      });
+    }
+
     const HISTORY_STORAGE_KEY = "puls_request_history_v1";
     const USER_STORAGE_KEY = "puls_web_user_id_v1";
 
@@ -308,7 +458,8 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
     }
     function loadLocalHistory() {
       try {
-        return JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+        const raw = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+        return Array.isArray(raw) ? raw.map((item, index) => normalizeHistoryRecord(item, index)) : [];
       } catch (error) {
         return [];
       }
@@ -320,20 +471,24 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
 
     async function saveHistoryItem(question, answer) {
       const item = {
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         question,
         answer,
         vehicle: "Укажите машину • Укажите мотор • Укажите привод",
-        type: "Текстовый запрос"
+        type: "Текстовый запрос",
+        source: "web"
       };
 
       const history = loadLocalHistory();
       const now = new Date();
       history.unshift({
         ...item,
-        date: now.toLocaleDateString("ru-RU", { day: "2-digit", month: "short" }) + ", " + now.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+        date: now.toLocaleDateString("ru-RU", { day: "2-digit", month: "short" }) + ", " + now.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }),
+        status: "Сохранено"
       });
       localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(0, 50)));
       await renderLists();
+      attachHistoryRowHandlers();
     }
 
     function updateQuota(quota) {
@@ -424,11 +579,19 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
       document.body.classList.add("assistant-mode");
       injectIcons();
       await renderLists();
+      attachHistoryRowHandlers();
       connectSpline();
 
       $("#sendBtn").addEventListener("click", sendPrompt);
       $("#promptInput").addEventListener("keydown", (event) => {
         if (event.key === "Enter") sendPrompt();
+      });
+      $("#historyCloseBtn")?.addEventListener("click", closeHistoryModal);
+      $("#historyModal")?.addEventListener("click", (event) => {
+        if (event.target.id === "historyModal") closeHistoryModal();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeHistoryModal();
       });
       window.addEventListener("resize", syncAssistantMessageHeight);
       syncAssistantMessageHeight();
@@ -463,9 +626,4 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
         }
       });
     });
-
-
-
-
-
 

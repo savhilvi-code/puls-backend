@@ -270,11 +270,33 @@
     </div>
   </div>
 
+  <div class="auth-modal" id="historyModal" aria-hidden="true">
+    <div class="auth-dialog history-dialog" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+      <button class="auth-close" id="historyCloseBtn" type="button" aria-label="Закрыть">×</button>
+      <h2 id="historyModalTitle">История запроса</h2>
+      <p id="historyModalMeta">Нажмите на запись, чтобы посмотреть ответ PULS.</p>
+      <div class="history-detail">
+        <div class="history-block">
+          <h3>Вопрос</h3>
+          <p id="historyModalQuestion"></p>
+        </div>
+        <div class="history-block">
+          <h3>Ответ</h3>
+          <div id="historyModalAnswer" class="history-answer"></div>
+        </div>
+        <div class="history-block">
+          <h3>Ссылки</h3>
+          <div id="historyModalLinks" class="topic-links"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="assets/js/supabaseClient.js?v=20260531-22"></script>
   <script src="assets/js/auth.js?v=20260531-22"></script>
-  <script src="assets/js/app.js?v=20260531-19"></script>
+  <script src="assets/js/app.js?v=20260608-01"></script>
 </body>
 </html>
 

@@ -801,6 +801,10 @@ html { scroll-behavior: smooth; }
       padding: 22px;
     }
 
+    .history-dialog {
+      width: min(760px, 100%);
+    }
+
     .auth-dialog h2 {
       margin: 0 0 8px;
       font-size: 24px;
@@ -862,6 +866,52 @@ html { scroll-behavior: smooth; }
 
     .auth-status.error {
       color: var(--warn);
+    }
+
+    .history-detail {
+      display: grid;
+      gap: 14px;
+      max-height: min(64vh, 720px);
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .history-block {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(4, 17, 29, .82);
+      padding: 14px;
+    }
+
+    .history-block h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+
+    .history-block p {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+
+    .history-answer {
+      color: var(--soft);
+      line-height: 1.6;
+      white-space: normal;
+    }
+
+    .history-answer a {
+      color: var(--blue);
+    }
+
+    .history-clickable {
+      cursor: pointer;
+      transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+    }
+
+    .history-clickable:hover {
+      transform: translateY(-1px);
+      border-color: rgba(8, 125, 255, .55);
+      box-shadow: 0 0 0 1px rgba(8, 125, 255, .12), 0 16px 28px rgba(0, 0, 0, .18);
     }
 
     .setting-line {
