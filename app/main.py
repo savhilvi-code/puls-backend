@@ -1,3 +1,7 @@
+import os
+from urllib.parse import urljoin
+
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -29,3 +33,29 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(chat_router)
 app.include_router(telegram_router)
+
+
+def _telegram_webhook_url() -> str:
+    explicit = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
+    if explicit:
+        return explicit
+
+    base_url = os.getenv("PUBLIC_BASE_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    if not base_url:
+        return ""
+    return urljoin(base_url.rstrip("/") + "/", "telegram/webhook")
+
+
+@app.on_event("startup")
+async def configure_telegram_webhook() -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    webhook_url = _telegram_webhook_url()
+    if not token or not webhook_url:
+        return
+
+    api_url = f"https://api.telegram.org/bot{token}/setWebhook"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            await client.post(api_url, json={"url": webhook_url})
+    except Exception:
+        return

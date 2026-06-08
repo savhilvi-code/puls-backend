@@ -38,6 +38,26 @@ def _fallback_diagnostic_prompt(language: str) -> str:
     return "Describe the problem with the car and I’ll start the diagnosis."
 
 
+def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str) -> str:
+    if language == "ru":
+        parts = [
+            "Похоже на потерю тяги после прогрева.",
+            "Сначала проверьте расход воздуха (ДМРВ/MAF), подсос воздуха, давление топлива и датчик температуры ОЖ.",
+            "Если есть турбина, проверьте управление наддувом и патрубки.",
+            "Если есть коды ошибок OBD, пришлите их — это сильно сузит поиск.",
+        ]
+        if active_car:
+            parts.insert(1, f"Машина: {active_car}.")
+        if symptom:
+            parts.insert(1, f"Симптом: {symptom}.")
+        return "\n\n".join(parts)
+    return (
+        "This looks like a warm-engine loss of power issue.\n\n"
+        "First check airflow (MAF), air leaks, fuel pressure, coolant temperature sensor, and boost control if the car has a turbo.\n\n"
+        "If you have OBD codes, send them and I’ll narrow it down."
+    )
+
+
 async def handle_message(payload: dict, source: str) -> ChatResponse:
     normalized = normalize_chat_input(payload, source=source)
     user = await get_or_create_user(normalized)
@@ -131,7 +151,13 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
     matched_case = await find_matching_case(state, decision)
     matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
     matched_case_links = (matched_case or {}).get("links", [])
-    if matched_case is not None and (matched_case_answer or matched_case_links):
+    matched_case_is_placeholder = matched_case_answer.lower() in {
+        "??????????? ?? ???????",
+        "diagnosis not found",
+        "no data",
+        "??? ??????",
+    }
+    if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
         answer_text = format_from_kb(
             language=state.language,
             answer=matched_case_answer,
@@ -174,20 +200,38 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             less_likely = probable_causes[2:]
             probable_causes = probable_causes[:2]
         response_links = parsed_case.get("links") or []
+        parser_placeholder = diagnosis_text.lower().strip() in {
+            "??????????? ?? ???????",
+            "diagnosis not found",
+            "no data",
+            "??? ??????",
+        }
 
-        answer_text = format_technical_answer(
-            language=state.language,
-            diagnosis=diagnosis_text or (probable_causes[0] if probable_causes else ""),
-            probable_causes=probable_causes,
-            first_checks=first_checks[:3],
-            less_likely=less_likely,
-            links=response_links,
-            question_tail=(
-                "Это помогло решить проблему? Если нет — напишите 'не помогло', и я запущу более глубокий поиск."
+        if diagnosis_text and not parser_placeholder:
+            answer_text = format_technical_answer(
+                language=state.language,
+                diagnosis=diagnosis_text or (probable_causes[0] if probable_causes else ""),
+                probable_causes=probable_causes,
+                first_checks=first_checks[:3],
+                less_likely=less_likely,
+                links=response_links,
+                question_tail=(
+                    "??? ??????? ?????? ????????? ???? ??? ? ???????? '?? ???????', ? ? ?????? ????? ???????? ?????."
+                    if state.language == "ru"
+                    else "Did this solve the problem? If not, write 'not helped' and I will run a deeper search."
+                ),
+            )
+        else:
+            answer_text = _generic_diagnostic_fallback(
+                language=state.language,
+                active_car=state.active_car,
+                symptom=effective_symptom,
+            )
+            answer_text += (
+                "\n\n??? ??????? ?????? ????????? ???? ??? ? ???????? '?? ???????', ? ? ?????? ????? ???????? ?????."
                 if state.language == "ru"
-                else "Did this solve the problem? If not, write 'not helped' and I will run a deeper search."
-            ),
-        )
+                else "\n\nDid this solve the problem? If not, write 'not helped' and I will run a deeper search."
+            )
         await update_user_after_response(
             user,
             normalized,
