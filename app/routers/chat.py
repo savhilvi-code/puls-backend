@@ -129,11 +129,13 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             state.active_car = user.car_info
 
     matched_case = await find_matching_case(state, decision)
-    if matched_case is not None and matched_case.get("links"):
+    matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
+    matched_case_links = (matched_case or {}).get("links", [])
+    if matched_case is not None and (matched_case_answer or matched_case_links):
         answer_text = format_from_kb(
             language=state.language,
-            answer=matched_case.get("answer", ""),
-            links=matched_case.get("links", []),
+            answer=matched_case_answer,
+            links=matched_case_links,
         )
         await update_user_after_response(
             user,
@@ -144,7 +146,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="kb_match",
         )
-        return ChatResponse(answer=answer_text, links=matched_case.get("links", []))
+        return ChatResponse(answer=answer_text, links=matched_case_links)
 
     if state.should_search:
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
