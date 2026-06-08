@@ -208,7 +208,11 @@ def build_dialog_state(normalized, user: UserRecord, decision: RouterDecision) -
         and not is_greeting
         and not is_feedback_helped
         and not is_feedback_not_helped
-        and not (_looks_like_problem_text(current_text) or _looks_like_problem_text_extended(current_text))
+        and not (
+            _looks_like_problem_text(current_text)
+            or _looks_like_problem_text_extended(current_text)
+            or _looks_like_diagnostic_intent(current_text)
+        )
     )
 
     return DialogState(
