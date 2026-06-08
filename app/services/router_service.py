@@ -13,6 +13,7 @@ _PROBLEM_HINTS = (
     "плохо",
     "не работает",
     "не заводится",
+    "не едет",
     "заводится",
     "теряет тягу",
     "потеря тяги",
@@ -247,6 +248,18 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
             }
         )
 
+    if has_diagnostic_intent or has_problem or has_car:
+        return decision.model_copy(
+            update={
+                "message_type": "new_diagnostic",
+                "need_car_info": False,
+                "need_clarification": False,
+                "ready_to_search": True,
+                "deep_search": False,
+                "response": "",
+            }
+        )
+
     if has_helped:
         return decision.model_copy(
             update={
@@ -255,28 +268,6 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
                 "ready_to_search": False,
                 "deep_search": False,
                 "response": decision.response or "Glad it helped.",
-            }
-        )
-
-    if has_car and has_problem and decision.message_type in {"general", "clarification"}:
-        return decision.model_copy(
-            update={
-                "message_type": "new_diagnostic",
-                "need_car_info": False,
-                "need_clarification": False,
-                "ready_to_search": True,
-                "deep_search": False,
-            }
-        )
-
-    if has_diagnostic_intent and decision.message_type in {"general", "clarification"}:
-        return decision.model_copy(
-            update={
-                "message_type": "new_diagnostic",
-                "need_car_info": False,
-                "need_clarification": False,
-                "ready_to_search": True,
-                "deep_search": False,
             }
         )
 

@@ -1,3 +1,5 @@
+from difflib import SequenceMatcher
+
 from fastapi import HTTPException
 
 from app.database.supabase import (
@@ -11,6 +13,27 @@ from app.services.formatter_service import format_from_kb
 
 def _normalize_text(value: str) -> str:
     return " ".join(str(value or "").lower().split())
+
+
+def _tokenize(value: str) -> list[str]:
+    return [
+        token
+        for token in _normalize_text(value)
+        .replace("/", " ")
+        .replace("-", " ")
+        .split()
+        if len(token) > 3
+    ]
+
+
+def _token_similar(a: str, b: str) -> bool:
+    left = _normalize_text(a)
+    right = _normalize_text(b)
+    if not left or not right:
+        return False
+    if left == right or left in right or right in left:
+        return True
+    return SequenceMatcher(None, left, right).ratio() >= 0.82
 
 
 def _contains_any(haystack: str, needle: str) -> bool:
@@ -77,6 +100,8 @@ def _score_case(row: dict, *, active_car: str, symptom: str, language: str, prev
     for token in _normalize_text(symptom).split():
         if len(token) > 3 and token in haystack:
             score += 1
+        elif any(_token_similar(token, hay_token) for hay_token in _tokenize(haystack)):
+            score += 1
     for token in _normalize_text(active_car).split():
         if len(token) > 2 and token in haystack:
             score += 1
@@ -142,6 +167,89 @@ async def find_matching_case(state, decision):
         "formatted_answer": formatted,
         "row": row,
     }
+
+
+def _parse_history_blocks(history: str) -> list[dict]:
+    blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
+    parsed: list[dict] = []
+    for block in blocks:
+        fields: dict[str, str] = {}
+        links: list[dict] = []
+        in_links = False
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.lower() == "links:":
+                in_links = True
+                continue
+            if in_links and line.startswith("- "):
+                link_body = line[2:].strip()
+                if ": " in link_body:
+                    title, url = link_body.split(": ", 1)
+                else:
+                    title, url = "", link_body
+                links.append({"title": title.strip(), "url": url.strip(), "description": "", "type": "link"})
+                continue
+            if ":" in line:
+                key, value = line.split(":", 1)
+                fields[key.strip().lower()] = value.strip()
+        parsed.append({"fields": fields, "links": links, "raw": block})
+    return parsed
+
+
+async def find_matching_history_case(*, history: str, active_car: str, symptom: str, language: str) -> dict | None:
+    blocks = _parse_history_blocks(history)
+    if not blocks:
+        return None
+
+    symptom_norm = _normalize_text(symptom)
+    active_norm = _normalize_text(active_car)
+    best: dict | None = None
+    best_score = 0
+
+    for block in reversed(blocks):
+        fields = block["fields"]
+        text_parts = " ".join(
+            [
+                fields.get("symptom", ""),
+                fields.get("user", ""),
+                fields.get("assistant", ""),
+                fields.get("active_car", ""),
+            ]
+        )
+        haystack = _normalize_text(text_parts)
+        score = 0
+
+        if symptom_norm and symptom_norm in haystack:
+            score += 6
+        for token in _tokenize(symptom):
+            if token in haystack:
+                score += 2
+            elif any(_token_similar(token, hay_token) for hay_token in _tokenize(haystack)):
+                score += 1
+        if active_norm and active_norm in haystack:
+            score += 3
+        if fields.get("message_type") in {"parser", "kb_match"}:
+            score += 1
+        if language and str(fields.get("source") or "").lower()[:2] == str(language).lower()[:2]:
+            score += 1
+
+        if score > best_score and (fields.get("assistant") or block["links"]):
+            best_score = score
+            answer = fields.get("assistant") or ""
+            best = {
+                "id": fields.get("id"),
+                "answer": answer,
+                "links": block["links"],
+                "formatted_answer": format_from_kb(language=language, answer=answer, links=block["links"]),
+                "row": fields,
+                "source_type": "history",
+            }
+
+    if best_score < 5:
+        return None
+    return best
 
 
 async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
