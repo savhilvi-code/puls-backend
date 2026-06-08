@@ -197,6 +197,8 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 {
                     "active_car": state.active_car or normalized.car_info or user.car_info,
                     "symptom": effective_symptom,
+                    "query": effective_symptom,
+                    "conversation_history": user.conversation_history or "",
                     "deep_search": bool(state.should_deep_search),
                     "language": state.language or normalized.language,
                 }
