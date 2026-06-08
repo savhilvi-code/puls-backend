@@ -1,0 +1,252 @@
+﻿<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CarDiagnostic AI</title>
+  <meta name="description" content="PULS для диагностики автомобиля, сервисной истории, ошибок DTC и мануалов.">
+  <link rel="stylesheet" href="assets/css/style.css?v=20260531-19">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-logo" src="assets/img/puls-logo.png" alt="PULS">
+        <div>
+          <div class="brand-title">CarDiagnostic <span>AI</span></div>
+          <div class="brand-subtitle">Ваш AI-помощник для диагностики автомобиля</div>
+        </div>
+      </div>
+      <div class="system-pill">PULS работает для вас 24/7</div>
+    </header>
+
+    <section class="hero" aria-label="Автомобиль">
+      <div class="car-visual" aria-hidden="true"></div>
+      <div>
+        <div class="hero-title">Укажите машину</div>
+        <div class="facts">
+          <div class="fact" data-icon="calendar"><span>Год выпуска<strong>Укажите год</strong></span></div>
+          <div class="fact" data-icon="engine"><span>Двигатель<strong>Укажите мотор</strong></span></div>
+          <div class="fact" data-icon="drivetrain"><span>Привод<strong>Укажите привод</strong></span></div>
+          <div class="fact" data-icon="fuel"><span>Тип топлива<strong>Укажите топливо</strong></span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="workspace">
+      <aside class="side">
+        <nav class="panel nav" aria-label="Разделы">
+          <button class="active" data-view="assistant" data-icon="bot">PULS</button>
+          <button data-view="car" data-icon="home">Мой автомобиль</button>
+          <button data-view="journal" data-icon="journal">Журнал запросов</button>
+          <button data-view="history" data-icon="history">История запросов</button>
+          <button data-view="dtc" data-icon="car">Ошибки (DTC)</button>
+          <button data-view="service" data-icon="service">Сервис и ТО</button>
+          <button data-view="manuals" data-icon="file">Мануалы</button>
+          <button data-view="video" data-icon="play">Видео</button>
+          <button data-view="settings" data-icon="settings">Настройки</button>
+        </nav>
+
+        <section class="panel sound-card">
+          <h3>Диагностика по шуму</h3>
+          <p>Как Shazam, только<br>для вашего авто</p>
+          <div class="rings">
+            <div>
+              <div class="listen">Слушаю...</div>
+              <div class="mic">🎙</div>
+            </div>
+          </div>
+          <div class="wave" aria-hidden="true"></div>
+          <a class="sound-link" href="#assistant">Запись звука неполадки</a>
+          <p>Говорите или воспроизведите шум — я распознаю и помогу</p>
+        </section>
+      </aside>
+
+      <main class="content">
+        <section class="panel main-panel">
+          <section class="view active" id="assistant">
+            <div class="chat-grid">
+              <div class="assistant-chat">
+                <div class="head">
+                  <div>
+                    <h1>PULS</h1>
+                    <p>Задайте любой вопрос о вашем автомобиле</p>
+                  </div>
+                </div>
+
+                <div class="messages" id="messages">
+                  <div class="bubble user">У меня при разгоне появляется гул под капотом, особенно на 2000–3000 оборотах. <small>10:42</small></div>
+                  <div class="bubble">
+                    <strong>PULS</strong><br>
+                    Похоже на проблему со вспомогательными узлами двигателя. Вероятные причины: износ подшипника генератора, ролик натяжителя ремня, помпа или приводной ремень.
+                    <br><br><strong>Что можно сделать:</strong><br>
+                    • Проверьте состояние ремня и роликов<br>
+                    • Послушайте шум стетоскопом или длинной отверткой<br>
+                    • Проверьте люфт роликов и подшипников
+                    <small>10:43</small>
+                  </div>
+                </div>
+              </div>
+
+              <aside class="assistant-right">
+                <div class="card">
+                  <h3>Итог: что проверить</h3>
+                  <div id="keyChecks">
+                    <p>После ответа PULS здесь появится краткий список ключевых проверок.</p>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <h3>Видео / ссылки по теме</h3>
+                  <div id="topicLinks" class="topic-links">
+                    <p>Здесь позже будут появляться ссылки на видео, мануалы и материалы из n8n.</p>
+                  </div>
+                  <button class="btn blue" data-action="demo">Смотреть видео</button>
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          <section class="view" id="car">
+            <div class="head">
+              <div>
+                <h1>Мой автомобиль</h1>
+                <p>Информация о вашем автомобиле и доступные материалы</p>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div>
+                <div class="card car-info">
+                  <div>
+                    <h3>Информация об автомобиле</h3>
+                    <div class="info-table">
+                      <span>Модель:</span><b>Укажите машину</b>
+                      <span>Год выпуска:</span><b>Укажите год</b>
+                      <span>Двигатель:</span><b>Укажите мотор</b>
+                      <span>Привод:</span><b>Укажите привод</b>
+                      <span>Топливо:</span><b>Укажите топливо</b>
+                      <span>КПП:</span><b>Укажите КПП</b>
+                      <span>VIN:</span><b>Укажите VIN</b>
+                    </div>
+                  </div>
+                  <div class="car-mini" aria-hidden="true"></div>
+                </div>
+                <div class="card">
+                  <h3>Быстрый доступ</h3>
+                  <div class="quick-grid">
+                    <div class="quick" data-icon="service">Регламент ТО</div>
+                    <div class="quick" data-icon="drivetrain">Схемы узлов</div>
+                    <div class="quick" data-icon="settings">Моменты затяжки</div>
+                    <div class="quick" data-icon="journal">Электросхемы</div>
+                    <div class="quick" data-icon="file">Предохранители</div>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <h3>Технические характеристики</h3>
+                <div class="spec-list">
+                  <div><span>Объем двигателя:</span><b>Укажите объем</b></div>
+                  <div><span>Мощность:</span><b>Укажите мощность</b></div>
+                  <div><span>Крутящий момент:</span><b>Укажите момент</b></div>
+                  <div><span>Тип двигателя:</span><b>Укажите топливо, рядный</b></div>
+                  <div><span>Количество цилиндров:</span><b>Укажите цилиндры</b></div>
+                  <div><span>Экологический класс:</span><b>Укажите класс</b></div>
+                  <div><span>Объем бака:</span><b>Укажите объем бака</b></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="journal">
+            <div class="head"><div><h1>Журнал запросов</h1><p>История обращений и полученных решений</p></div></div>
+            <div class="search"><input id="journalSearch" placeholder="Поиск по запросам"><button class="btn" data-action="filter">Фильтр</button></div>
+            <div class="list" id="journalList"></div>
+          </section>
+
+          <section class="view" id="history">
+            <div class="head"><div><h1>История запросов</h1><p>Ваши недавние запросы и обращения к PULSу</p></div></div>
+            <div class="search"><input id="historySearch" placeholder="Поиск по запросам"><button class="btn" data-action="filter">Фильтр</button></div>
+            <div class="list" id="historyList"></div>
+          </section>
+
+          <section class="view" id="dtc">
+            <div class="head"><div><h1>Ошибки (DTC)</h1><p>Диагностические коды неисправностей вашего автомобиля</p></div><button class="btn" data-action="demo">Удалить все</button></div>
+            <div class="card alert"><strong class="warn">Найдено 3 ошибки.</strong> Рекомендуется проверить и устранить ошибки для корректной работы автомобиля.</div>
+            <div id="dtcList"></div>
+          </section>
+
+          <section class="view" id="service">
+            <div class="head"><div><h1>Сервис и ТО</h1><p>История технического обслуживания и выполненных работ</p></div><button class="btn" data-action="demo">Добавить запись</button></div>
+            <div id="serviceList"></div>
+          </section>
+
+          <section class="view" id="manuals">
+            <div class="head"><div><h1>Мануалы и руководства</h1><p>Подробные руководства и рекомендации по обслуживанию</p></div></div>
+            <div class="search"><input id="manualSearch" placeholder="Поиск по мануалам"><button class="btn" data-action="filter">Фильтр</button></div>
+            <div class="manuals" id="manualList"></div>
+          </section>
+
+          <section class="view" id="video">
+            <div class="head"><div><h1>Видео</h1><p>История всех видеороликов, предоставленных в переписке</p></div></div>
+            <div class="search"><input id="videoSearch" placeholder="Поиск по видео"><button class="btn" data-action="filter">Фильтр</button></div>
+            <div class="list" id="videoList"></div>
+          </section>
+
+          <section class="view" id="settings">
+            <div class="head"><div><h1>Настройки</h1><p>Управляйте аккаунтом, подпиской и приложением</p></div></div>
+            <div class="settings">
+              <div class="card">
+                <h3>Профиль</h3>
+                <p><strong>Алексей Иванов</strong><br>alexey.ivanov@mail.ru</p>
+                <button class="btn blue" data-action="demo">Редактировать профиль</button>
+              </div>
+              <div class="card">
+                <h3>Подписка</h3>
+                <p class="ok"><strong>Premium активна</strong></p>
+                <p>PULS без лимитов, диагностика по коду и симптомам, сервисная история и экспорт отчетов.</p>
+              </div>
+              <div class="card">
+                <h3>Уведомления</h3>
+                <div class="setting-line"><span>Напоминания о ТО</span><b>Вкл</b></div>
+                <div class="setting-line"><span>Диагностика и ошибки</span><b>Вкл</b></div>
+                <div class="setting-line"><span>Новые видео и мануалы</span><b>Выкл</b></div>
+                <div class="setting-line"><span>Акции и обновления</span><b>Вкл</b></div>
+              </div>
+              <div class="card">
+                <h3>Язык и регион</h3>
+                <div class="setting-line"><span>Язык приложения</span><b>Русский</b></div>
+                <div class="setting-line"><span>Единицы измерения</span><b>км, °C</b></div>
+                <div class="setting-line"><span>Часовой пояс</span><b>UTC+3</b></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="panel composer" aria-label="Запрос AI">
+          <div class="composer-line">
+            <div class="composer-menu-wrap">
+              <button class="composer-icon-btn" id="composerMenuBtn" type="button" aria-label="Открыть меню вложений" aria-expanded="false">+</button>
+              <div class="composer-menu" id="composerMenu" aria-label="Меню действий">
+                <button type="button" data-action="demo"><span>▧</span>Прикрепить фото</button>
+                <button type="button" data-action="demo"><span>▣</span>Отправить видео</button>
+                <button type="button" data-action="dtc"><span>⌁</span>Диагностика по коду</button>
+              </div>
+            </div>
+            <input id="promptInput" placeholder="Опишите проблему или задайте вопрос..." autocomplete="off">
+            <button class="composer-icon-btn voice-btn" type="button" data-action="voice" aria-label="Голосовой ввод">🎙</button>
+            <button class="send" id="sendBtn" aria-label="Отправить">➤</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="assets/js/app.js?v=20260531-19"></script>
+</body>
+</html>
+
+
+
+
+

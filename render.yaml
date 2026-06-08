@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: puls-car-diagnostic-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: PARSER_API_URL
+        sync: false
+      - key: FRONTEND_API_URL
+        value: /chat
