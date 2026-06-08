@@ -75,6 +75,17 @@ def _looks_like_diagnostic_intent(text: str) -> bool:
             'stall',
             'stalls',
             'loss of power',
+            'how to',
+            'replace',
+            'adjust',
+            'tune',
+            'fix',
+            'repair',
+            'change',
+            'remove',
+            'install',
+            'service',
+            'set up',
         )
     )
 
