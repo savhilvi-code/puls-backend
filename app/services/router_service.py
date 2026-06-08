@@ -31,7 +31,6 @@ _PROBLEM_HINTS = (
     "stalls",
     "loss of power",
     "turbo",
-    "engine",
 )
 _FEEDBACK_HELPED = ("helped", "fixed", "solved", "works", "помогло", "исправлено", "решено", "работает")
 _FEEDBACK_DEEP = ("не помогло", "ищи глубже", "нужно больше информации", "more details", "not helped", "still")
@@ -89,7 +88,6 @@ def _has_diagnostic_intent(text: str) -> bool:
             "поменять",
             "починить",
             "прикуриватель",
-            "engine",
             "turbo",
             "stall",
             "stalls",

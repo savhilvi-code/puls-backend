@@ -43,6 +43,12 @@ def _build_parser_history_context(history: str, *, symptom: str, active_car: str
     return "\n---\n".join(selected)[:4000]
 
 
+def _should_use_history_for_parser(state, decision) -> bool:
+    if state.is_feedback_not_helped or state.should_deep_search:
+        return True
+    return decision.message_type in {"followup", "followup_deep"}
+
+
 def _greeting_text(language: str, assistant_hint: str = "") -> str:
     if assistant_hint:
         return assistant_hint
@@ -224,11 +230,13 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
         parser_input = normalized.model_copy(update={"text": effective_symptom})
         try:
-            parser_history = _build_parser_history_context(
-                user.conversation_history or "",
-                symptom=effective_symptom,
-                active_car=state.active_car or normalized.car_info or user.car_info,
-            )
+            parser_history = ""
+            if _should_use_history_for_parser(state, decision):
+                parser_history = _build_parser_history_context(
+                    user.conversation_history or "",
+                    symptom=effective_symptom,
+                    active_car=state.active_car or normalized.car_info or user.car_info,
+                )
             parsed_case = await parse_diagnostic(
                 {
                     "active_car": state.active_car or normalized.car_info or user.car_info,
@@ -296,7 +304,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 less_likely=less_likely,
                 links=response_links,
                 question_tail=(
-                    "??? ??????? ?????? ????????? ???? ??? ? ???????? '?? ???????', ? ? ?????? ????? ???????? ?????."
+                    "Это помогло решить проблему? Если нет - напишите 'не помогло', и я запущу более глубокий поиск."
                     if state.language == "ru"
                     else "Did this solve the problem? If not, write 'not helped' and I will run a deeper search."
                 ),
@@ -308,7 +316,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 symptom=effective_symptom,
             )
             answer_text += (
-                "\n\n??? ??????? ?????? ????????? ???? ??? ? ???????? '?? ???????', ? ? ?????? ????? ???????? ?????."
+                "\n\nЭто помогло решить проблему? Если нет - напишите 'не помогло', и я запущу более глубокий поиск."
                 if state.language == "ru"
                 else "\n\nDid this solve the problem? If not, write 'not helped' and I will run a deeper search."
             )

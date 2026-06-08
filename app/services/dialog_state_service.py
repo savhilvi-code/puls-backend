@@ -72,7 +72,6 @@ def _looks_like_diagnostic_intent(text: str) -> bool:
             'поменять',
             'починить',
             'прикуриватель',
-            'engine',
             'turbo',
             'stall',
             'stalls',
@@ -140,7 +139,6 @@ def _looks_like_problem_text(text: str) -> bool:
         "вибрац",
         "ошиб",
         "loss of power",
-        "engine",
         "turbo",
     ]
     return any(token in lowered for token in keywords)
