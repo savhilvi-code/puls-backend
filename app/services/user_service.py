@@ -10,6 +10,7 @@ from app.database.supabase import (
     update_conversation_history,
 )
 from app.services.dialog_state_service import history_context_block
+from app.services.request_journal_service import save_diagnostic_request
 from app.schemas.user import UserRecord
 
 DEFAULT_REQUESTS_LEFT = 5
@@ -80,6 +81,17 @@ async def update_user_after_response(
             user.conversation_history = updated_user.conversation_history
             user.car_info = updated_user.car_info
             user.requests_left = updated_user.requests_left
+
+        if user.id is not None and message_type not in {"greeting", "limit"}:
+            try:
+                await save_diagnostic_request(
+                    user_id=user.id,
+                    normalized=normalized,
+                    answer=answer,
+                    message_type=message_type,
+                )
+            except Exception:
+                pass
     except SupabaseUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SupabaseOperationError as exc:

@@ -19,10 +19,43 @@ def _contains_any(haystack: str, needle: str) -> bool:
     return bool(need) and need in hay
 
 
+def _is_placeholder_case(row: dict) -> bool:
+    text = " ".join(
+        [
+            str(row.get("symptom_title") or ""),
+            str(row.get("symptom_description") or ""),
+            str(row.get("confirmed_cause") or ""),
+            str(row.get("recommended_action") or ""),
+            str(row.get("full_answer") or ""),
+        ]
+    ).lower()
+    placeholder_phrases = (
+        "диагностика не найдена",
+        "нет данных",
+        "я готов помочь, но мне не хватает информации",
+        "мне не хватает информации",
+        "не вижу описания проблемы",
+        "не вижу описания симптома",
+        "опишите проблему",
+        "опишите симптом",
+        "please describe",
+        "i need more information",
+        "i need more info",
+        "need more information",
+        "diagnosis not found",
+        "no data",
+    )
+    if any(phrase in text for phrase in placeholder_phrases):
+        return True
+    if not str(row.get("confirmed_cause") or "").strip() and not str(row.get("recommended_action") or "").strip():
+        return True
+    return False
+
+
 def _score_case(row: dict, *, active_car: str, symptom: str, language: str, previous_symptom: str = "") -> int:
     recommended_action = str(row.get("recommended_action") or "").strip()
     confirmed_cause = str(row.get("confirmed_cause") or "").strip()
-    if not recommended_action and not confirmed_cause:
+    if _is_placeholder_case(row):
         return 0
 
     haystack = " ".join(
@@ -65,6 +98,10 @@ async def find_matching_case(state, decision):
     except SupabaseOperationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    if not rows:
+        return None
+
+    rows = [row for row in rows if not _is_placeholder_case(row)]
     if not rows:
         return None
 
@@ -111,6 +148,18 @@ async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
     extracted_cases = parsed_case.get("extracted_cases") or []
     first_case = extracted_cases[0] if extracted_cases else {}
     parser_summary = str(parsed_case.get("parser_summary") or "")
+    if not parser_summary.strip() and not extracted_cases:
+        return None
+    if _is_placeholder_case(
+        {
+            "symptom_title": decision.active_car or normalized.text or "",
+            "symptom_description": normalized.text,
+            "confirmed_cause": str(first_case.get("cause") or parser_summary or ""),
+            "recommended_action": str(first_case.get("solution") or parser_summary or ""),
+            "full_answer": parser_summary,
+        }
+    ):
+        return None
     payload = {
         "symptom_title": (decision.active_car or normalized.text or "")[:500],
         "symptom_description": normalized.text,
