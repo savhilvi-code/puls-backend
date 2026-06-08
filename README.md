@@ -30,7 +30,7 @@ This project includes `render.yaml` for a Python web service. On Render, use the
 - `app/services/kb_service.py` - knowledge base lookup/save stub.
 - `app/services/parser_engine.py` - embedded parser/search service.
 - `app/services/parser_service.py` - local adapter used by `/chat`.
-- `app/routers/search.py` - optional `/search` and `/diagnose` endpoints backed by the embedded parser.
+- `app/routers/search.py` - `/search` and `/diagnose` endpoints backed by the embedded parser.
 - `app/services/openai_service.py` - OpenAI integration placeholder.
 - `app/services/telegram_service.py` - Telegram Bot API sender.
 - `app/database/supabase.py` - Supabase client and repository layer.
