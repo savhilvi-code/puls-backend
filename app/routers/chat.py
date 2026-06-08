@@ -153,41 +153,46 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
         if not state.active_car and user.car_info:
             state.active_car = user.car_info
 
-    matched_case = await find_matching_case(state, decision)
-    matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
-    matched_case_links = (matched_case or {}).get("links", [])
-    matched_case_is_placeholder = _contains_any_phrase(
-        matched_case_answer,
-        {
-            "диагностика не найдена",
-            "нет данных",
-            "я готов помочь, но мне не хватает информации",
-            "мне не хватает информации",
-            "не вижу описания проблемы",
-            "не вижу описания симптома",
-            "опишите проблему",
-            "please describe",
-            "i need more information",
-            "i need more info",
-            "need more information",
-        },
-    )
-    if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
-        answer_text = format_from_kb(
-            language=state.language,
-            answer=matched_case_answer,
-            links=matched_case_links,
+    matched_case = None
+    matched_case_answer = ""
+    matched_case_links = []
+    matched_case_is_placeholder = False
+    if state.should_search and not state.should_deep_search:
+        matched_case = await find_matching_case(state, decision)
+        matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
+        matched_case_links = (matched_case or {}).get("links", [])
+        matched_case_is_placeholder = _contains_any_phrase(
+            matched_case_answer,
+            {
+                "?????????????????????? ???? ??????????????",
+                "?????? ????????????",
+                "?? ?????????? ????????????, ???? ?????? ???? ?????????????? ????????????????????",
+                "?????? ???? ?????????????? ????????????????????",
+                "???? ???????? ???????????????? ????????????????",
+                "???? ???????? ???????????????? ????????????????",
+                "?????????????? ????????????????",
+                "please describe",
+                "i need more information",
+                "i need more info",
+                "need more information",
+            },
         )
-        await update_user_after_response(
-            user,
-            normalized,
-            answer_text,
-            should_decrease_limit=bool(state.should_search),
-            active_car=state.active_car,
-            symptom=state.current_symptom,
-            message_type="kb_match",
-        )
-        return ChatResponse(answer=answer_text, links=matched_case_links)
+        if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
+            answer_text = format_from_kb(
+                language=state.language,
+                answer=matched_case_answer,
+                links=matched_case_links,
+            )
+            await update_user_after_response(
+                user,
+                normalized,
+                answer_text,
+                should_decrease_limit=bool(state.should_search),
+                active_car=state.active_car,
+                symptom=state.current_symptom,
+                message_type="kb_match",
+            )
+            return ChatResponse(answer=answer_text, links=matched_case_links)
 
     if state.should_search:
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
