@@ -20,12 +20,17 @@ def _contains_any(haystack: str, needle: str) -> bool:
 
 
 def _score_case(row: dict, *, active_car: str, symptom: str, language: str, previous_symptom: str = "") -> int:
+    recommended_action = str(row.get("recommended_action") or "").strip()
+    confirmed_cause = str(row.get("confirmed_cause") or "").strip()
+    if not recommended_action and not confirmed_cause:
+        return 0
+
     haystack = " ".join(
         [
             str(row.get("symptom_title") or ""),
             str(row.get("symptom_description") or ""),
-            str(row.get("confirmed_cause") or ""),
-            str(row.get("recommended_action") or ""),
+            confirmed_cause,
+            recommended_action,
             str(row.get("country") or ""),
         ]
     ).lower()
@@ -85,7 +90,9 @@ async def find_matching_case(state, decision):
     if best_score < 4:
         return None
 
-    answer = row.get("recommended_action") or row.get("symptom_description") or ""
+    answer = str(row.get("recommended_action") or row.get("confirmed_cause") or "").strip()
+    if not answer:
+        return None
     formatted = format_from_kb(
         language=state.language,
         answer=answer,
