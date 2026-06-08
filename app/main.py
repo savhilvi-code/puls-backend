@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -11,6 +12,19 @@ load_dotenv(BASE_DIR / ".env")
 load_dotenv(BASE_DIR / ".env.txt")
 
 app = FastAPI(title="PULS car diagnostic backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://pulscar.co",
+        "https://www.pulscar.co",
+        "http://localhost:3000",
+        "*",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(health_router)
 app.include_router(chat_router)
