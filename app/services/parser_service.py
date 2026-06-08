@@ -98,15 +98,21 @@ async def parse_diagnostic(router_json: dict) -> dict:
 
     data = await diagnose(payload)
 
-    forums_found = data.get("forums_found")
     topics_found = data.get("topics_found", [])
+    forums_found = data.get("forums_found")
     links = data.get("links", [])
     extracted_cases = data.get("extracted_cases", [])
     parser_summary = str(data.get("parser_summary") or data.get("summary") or data.get("recommendation") or "")
 
+    normalized_links = _normalize_links(links)
+    if not normalized_links:
+        normalized_links = _build_links_from_topics(topics_found)
+
+    normalized_forums = forums_found if isinstance(forums_found, list) else _build_forums_found(topics_found)
+
     return {
-        "forums_found": forums_found if isinstance(forums_found, list) else [],
-        "links": links if isinstance(links, list) else [],
+        "forums_found": normalized_forums,
+        "links": normalized_links,
         "extracted_cases": extracted_cases if isinstance(extracted_cases, list) else [],
         "parser_summary": parser_summary,
         "topics_found": topics_found if isinstance(topics_found, list) else [],
