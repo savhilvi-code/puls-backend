@@ -1417,10 +1417,18 @@ body.assistant-mode .messages {
 }
 
 body.assistant-mode .assistant-right {
+  position: sticky !important;
+  top: 4px !important;
+  align-self: start;
   height: auto !important;
-  max-height: none !important;
-  overflow: visible !important;
+  max-height: calc(100vh - 150px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
   padding-bottom: 24px !important;
+}
+
+body.assistant-mode .assistant-right .card:first-child {
+  margin-top: 0;
 }
 
 /* ===== Compact ChatGPT-like composer ===== */
