@@ -1417,11 +1417,12 @@ body.assistant-mode .messages {
 }
 
 body.assistant-mode .assistant-right {
-  position: sticky !important;
-  top: 4px !important;
-  align-self: start;
-  height: auto !important;
-  max-height: calc(100vh - 150px) !important;
+  position: fixed !important;
+  top: 132px !important;
+  right: 20px !important;
+  width: 340px;
+  height: calc(100vh - 246px) !important;
+  max-height: calc(100vh - 246px) !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
   padding-bottom: 24px !important;
