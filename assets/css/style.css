@@ -1326,57 +1326,94 @@ html { scroll-behavior: smooth; }
   }
 }
 
-/* ===== Page mode: normal scrolling outside PULS chat ===== */
-body.page-mode {
-  overflow-y: auto !important;
+    /* ===== Unified ChatGPT-like workspace ===== */
+body.page-mode,
+body.assistant-mode {
+  overflow: hidden !important;
 }
 
-body.page-mode .app {
-  height: auto !important;
+body.page-mode .app,
+body.assistant-mode .app {
+  height: 100vh !important;
   min-height: 100vh;
-  overflow: visible !important;
-  padding-bottom: 150px;
+  overflow: hidden !important;
+  padding-bottom: 0;
 }
 
-body.page-mode .workspace {
-  height: auto !important;
+body.page-mode .workspace,
+body.assistant-mode .workspace {
+  height: 100%;
   min-height: 0;
-  overflow: visible !important;
-  align-items: start;
+  overflow: hidden !important;
+  align-items: stretch;
 }
 
-body.page-mode .side {
-  position: sticky;
-  top: 90px;
-  max-height: calc(100vh - 110px);
-  overflow-y: auto;
+body.page-mode .side,
+body.assistant-mode .side {
+  position: relative;
+  top: auto;
+  height: 100% !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scrollbar-color: #0b7ee8 transparent;
 }
 
 body.page-mode .content,
+body.page-mode .content > .main-panel,
+body.assistant-mode .content,
+body.assistant-mode .content > .main-panel {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
 body.page-mode .content > .main-panel {
-  height: auto !important;
-  min-height: calc(100vh - 120px);
-  overflow: visible !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 4px 4px 170px;
+}
+
+body.assistant-mode .content,
+body.assistant-mode #assistant.view.active,
+body.assistant-mode #assistant .chat-grid,
+body.assistant-mode .assistant-chat {
+  overflow: hidden !important;
+}
+
+body.assistant-mode .content > .main-panel {
+  overflow: hidden !important;
+  padding: 0;
 }
 
 body.page-mode .view.active {
-  height: auto !important;
-  min-height: calc(100vh - 160px);
-  overflow: visible !important;
-  padding: 4px 4px 170px;
+  min-height: 100%;
 }
 
 body.page-mode #assistant.view {
   display: none !important;
 }
 
-body.assistant-mode {
-  overflow: hidden;
+body.assistant-mode #assistant.view.active {
+  padding: 0;
 }
 
-body.assistant-mode .app {
-  height: 100vh;
-  overflow: hidden;
+body.assistant-mode #assistant .chat-grid {
+  align-items: start;
+}
+
+body.assistant-mode .messages {
+  height: auto !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  padding: 0 12px 34px 4px !important;
+}
+
+body.assistant-mode .assistant-right {
+  height: 100% !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  padding-bottom: 34px !important;
 }
 
 /* ===== Compact ChatGPT-like composer ===== */
@@ -1540,76 +1577,6 @@ body.assistant-mode .bubble:last-child {
   body.assistant-mode .assistant-right {
     padding-bottom: 34px !important;
   }
-}
-
-/* ===== PULS page: no clipped text or side card ===== */
-body.assistant-mode {
-  overflow: hidden !important;
-}
-
-body.assistant-mode .app {
-  height: 100vh !important;
-  min-height: 100vh;
-  overflow: hidden !important;
-  padding-bottom: 0;
-}
-
-body.assistant-mode .workspace {
-  height: auto !important;
-  min-height: 0;
-  overflow: visible !important;
-  align-items: start;
-}
-
-body.assistant-mode .side {
-  position: sticky;
-  top: 90px;
-  height: auto !important;
-  max-height: calc(100vh - 110px) !important;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
-  scrollbar-color: #0b7ee8 transparent;
-}
-
-body.assistant-mode .content,
-body.assistant-mode #assistant.view.active,
-body.assistant-mode #assistant .chat-grid,
-body.assistant-mode .assistant-chat {
-  height: auto !important;
-  min-height: 0 !important;
-  overflow: visible !important;
-}
-
-body.assistant-mode .content > .main-panel {
-  height: calc(100vh - 132px) !important;
-  min-height: 0 !important;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
-  padding: 4px 4px 170px;
-  scroll-padding-bottom: 130px;
-}
-
-body.assistant-mode #assistant.view.active {
-  padding: 0;
-}
-
-body.assistant-mode #assistant .chat-grid {
-  align-items: start;
-}
-
-body.assistant-mode .messages {
-  height: auto !important;
-  max-height: none !important;
-  min-height: 0 !important;
-  overflow: visible !important;
-  padding: 0 12px 34px 4px !important;
-}
-
-body.assistant-mode .assistant-right {
-  height: auto !important;
-  max-height: none !important;
-  overflow: visible !important;
-  padding-bottom: 34px !important;
 }
 
 /* ===== Center composer in the main workspace ===== */
