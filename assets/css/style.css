@@ -1368,24 +1368,28 @@ body.assistant-mode .content > .main-panel {
 }
 
 body.page-mode .content > .main-panel {
+  height: calc(100% - 92px) !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
-  padding: 4px 4px 170px;
+  padding: 4px 4px clamp(320px, 36vh, 420px) !important;
 }
 
 body.assistant-mode .content,
 body.assistant-mode #assistant.view.active,
 body.assistant-mode #assistant .chat-grid,
 body.assistant-mode .assistant-chat {
-  overflow: hidden !important;
+  overflow: visible !important;
 }
 
 body.assistant-mode .content > .main-panel {
-  overflow: hidden !important;
-  padding: 0;
+  height: calc(100% - 92px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 4px 4px clamp(320px, 36vh, 420px) !important;
 }
 
 body.page-mode .view.active {
+  height: auto !important;
   min-height: 100%;
 }
 
@@ -1394,26 +1398,29 @@ body.page-mode #assistant.view {
 }
 
 body.assistant-mode #assistant.view.active {
+  height: auto !important;
+  min-height: 100%;
   padding: 0;
 }
 
 body.assistant-mode #assistant .chat-grid {
   align-items: start;
+  height: auto !important;
 }
 
 body.assistant-mode .messages {
   height: auto !important;
   max-height: none !important;
   min-height: 0 !important;
-  overflow-y: auto !important;
-  padding: 0 12px 34px 4px !important;
+  overflow: visible !important;
+  padding: 0 12px 24px 4px !important;
 }
 
 body.assistant-mode .assistant-right {
-  height: 100% !important;
+  height: auto !important;
   max-height: none !important;
-  overflow-y: auto !important;
-  padding-bottom: 34px !important;
+  overflow: visible !important;
+  padding-bottom: 24px !important;
 }
 
 /* ===== Compact ChatGPT-like composer ===== */
