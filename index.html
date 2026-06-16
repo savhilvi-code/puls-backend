@@ -20,6 +20,50 @@
       <div class="system-pill">PULS работает для вас 24/7</div>
     </header>
 
+    <header class="mobile-topbar" aria-label="Мобильная навигация">
+      <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="Открыть меню" aria-expanded="false">
+        <span class="mobile-menu-bars" aria-hidden="true"><i></i><i></i><i></i></span>
+      </button>
+      <button class="mobile-brand" type="button" data-view="assistant" aria-label="Открыть PULS">
+        <img class="mobile-brand-logo" src="assets/img/puls-logo.png" alt="PULS">
+        <span class="mobile-brand-copy">
+          <span class="mobile-brand-title">CarDiagnostic <span>AI</span></span>
+          <span class="mobile-brand-subtitle">Ваш AI ассистент для диагностики авто</span>
+        </span>
+      </button>
+      <button class="mobile-car-btn" type="button" data-view="car" aria-label="Мой автомобиль">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M4 13l2-5h12l2 5"/>
+          <rect x="3" y="13" width="18" height="6" rx="2"/>
+          <path d="M7 19v2M17 19v2M7 16h.01M17 16h.01"/>
+        </svg>
+      </button>
+    </header>
+
+    <div class="mobile-drawer-backdrop" id="mobileDrawerBackdrop" hidden></div>
+    <aside class="mobile-drawer" id="mobileDrawer" aria-hidden="true">
+      <div class="mobile-drawer-head">
+        <div class="mobile-drawer-brand">
+          <img class="mobile-drawer-logo" src="assets/img/puls-logo.png" alt="PULS">
+          <div>
+            <div class="mobile-drawer-title">CarDiagnostic <span>AI</span></div>
+            <div class="mobile-drawer-subtitle">Ваш AI ассистент для диагностики авто</div>
+          </div>
+        </div>
+        <button class="mobile-drawer-close" id="mobileDrawerClose" type="button" aria-label="Закрыть меню">×</button>
+      </div>
+      <nav class="mobile-drawer-nav" aria-label="Мобильное меню">
+        <button class="active" type="button" data-view="assistant"><span data-icon="bot" aria-hidden="true"></span>AI ассистент</button>
+        <button type="button" data-view="car"><span data-icon="home" aria-hidden="true"></span>Мой автомобиль</button>
+        <button type="button" data-view="history"><span data-icon="history" aria-hidden="true"></span>История запросов</button>
+        <button type="button" data-view="journal"><span data-icon="journal" aria-hidden="true"></span>Журнал запросов</button>
+        <button type="button" data-view="manuals"><span data-icon="file" aria-hidden="true"></span>Руководства</button>
+        <button type="button" data-view="dtc"><span data-icon="warning" aria-hidden="true"></span>Коды ошибок (DTC)</button>
+        <button type="button" data-view="settings"><span data-icon="settings" aria-hidden="true"></span>Настройки</button>
+        <button type="button" data-action="demo"><span data-icon="help" aria-hidden="true"></span>Поддержка и помощь</button>
+      </nav>
+    </aside>
+
     <section class="hero" aria-label="Автомобиль">
       <div class="car-visual" aria-hidden="true"></div>
       <div>
@@ -67,6 +111,11 @@
           <section class="view active" id="assistant">
             <div class="chat-grid">
               <div class="assistant-chat">
+                <div class="mobile-hero-copy" aria-hidden="true">
+                  <div class="mobile-kicker"><span data-icon="service" aria-hidden="true"></span><span>Планы обслуживания</span></div>
+                  <h1>Готов, когда<br>ты готов.</h1>
+                </div>
+
                 <div class="head">
                   <div>
                     <h1>PULS</h1>
@@ -75,8 +124,8 @@
                 </div>
 
                 <div class="messages" id="messages">
-                  <div class="bubble user">У меня при разгоне появляется гул под капотом, особенно на 2000–3000 оборотах. <small>10:42</small></div>
-                  <div class="bubble">
+                  <div class="bubble user demo-bubble">У меня при разгоне появляется гул под капотом, особенно на 2000–3000 оборотах. <small>10:42</small></div>
+                  <div class="bubble demo-bubble">
                     <strong>PULS</strong><br>
                     Похоже на проблему со вспомогательными узлами двигателя. Вероятные причины: износ подшипника генератора, ролик натяжителя ремня, помпа или приводной ремень.
                     <br><br><strong>Что можно сделать:</strong><br>
@@ -86,6 +135,16 @@
                     <small>10:43</small>
                   </div>
                 </div>
+
+                <div class="mobile-disclaimer" aria-hidden="true">
+                  <div class="mobile-disclaimer-icon" data-icon="settings"></div>
+                  <div class="mobile-disclaimer-copy">
+                    <p>CarDiagnostic AI — это ИИ. Используя его, вы соглашаетесь с <a href="#settings">Условиями использования</a> и <a href="#settings">Политикой конфиденциальности</a>.</p>
+                    <p>Ответы могут содержать ошибки. Проверяйте важную информацию перед применением.</p>
+                  </div>
+                </div>
+
+                <div class="mobile-footer-card" aria-hidden="true"></div>
               </div>
 
               <aside class="assistant-right">

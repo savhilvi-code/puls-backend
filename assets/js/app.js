@@ -1,6 +1,8 @@
 const N8N_WEBHOOK_URL = "https://puls-backend-t3sn.onrender.com/chat";
-const HISTORY_API_URL = "https://puls-backend-t3sn.onrender.com/api/history";`r`nconst SPLINE_SCENE_URL = "";
+const HISTORY_API_URL = "https://puls-backend-t3sn.onrender.com/api/history";
+const SPLINE_SCENE_URL = "";
 const CURRENT_EMAIL_KEY = "puls_current_email_v1";
+let mobileDrawerBackdropTimer = null;
 
     const iconMap = {
       bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 4v4M8 13h.01M16 13h.01M7 21h10M3 11v4M21 11v4"/></svg>',
@@ -11,6 +13,8 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
       service: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 7l3-3 3 3-3 3zM4 20l6-6M6 4l14 14M4 10l6-6"/></svg>',
       file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg>',
       play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4z"/></svg>',
+      warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10.3 4.7l-7.4 12.8A2 2 0 0 0 4.6 20h14.8a2 2 0 0 0 1.7-3l-7.4-12.8a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+      help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 1 1 4 2.2c-.9.6-1.5 1.1-1.5 2.3v.5M12 17h.01"/></svg>',
       settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3-.2-.1a1.7 1.7 0 0 0-2 .2 1.7 1.7 0 0 0-.8 1.5V22h-3.6v-.3a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.2.1-2-3 .1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1.1H4v-3.6h.3a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3 .2.1a1.7 1.7 0 0 0 2-.2A1.7 1.7 0 0 0 10.4 3V2h3.6v1a1.7 1.7 0 0 0 .9 1.5 1.7 1.7 0 0 0 1.9-.3l.2-.1 2 3-.1.1a1.7 1.7 0 0 0-.3 1.9c.2.7.8 1.1 1.5 1.1h.3V14h-.3a1.7 1.7 0 0 0-1.5 1z"/></svg>',
       calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>',
       engine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 8h8l3 3v5h-3l-2 3H9l-2-3H4v-5h3z"/><path d="M9 5h6M12 5v3M20 12h2M2 12h2"/></svg>',
@@ -124,13 +128,45 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
       `).join("");
     }
 
+    function openMobileDrawer() {
+      const drawer = $("#mobileDrawer");
+      const backdrop = $("#mobileDrawerBackdrop");
+      const btn = $("#mobileMenuBtn");
+      if (!drawer || !backdrop || !btn) return;
+      clearTimeout(mobileDrawerBackdropTimer);
+      drawer.classList.add("open");
+      drawer.setAttribute("aria-hidden", "false");
+      backdrop.hidden = false;
+      requestAnimationFrame(() => backdrop.classList.add("show"));
+      btn.setAttribute("aria-expanded", "true");
+      document.body.classList.add("mobile-drawer-open");
+    }
+
+    function closeMobileDrawer() {
+      const drawer = $("#mobileDrawer");
+      const backdrop = $("#mobileDrawerBackdrop");
+      const btn = $("#mobileMenuBtn");
+      if (!drawer || !backdrop || !btn) return;
+      drawer.classList.remove("open");
+      drawer.setAttribute("aria-hidden", "true");
+      backdrop.classList.remove("show");
+      clearTimeout(mobileDrawerBackdropTimer);
+      mobileDrawerBackdropTimer = setTimeout(() => {
+        if (!drawer.classList.contains("open")) backdrop.hidden = true;
+      }, 220);
+      btn.setAttribute("aria-expanded", "false");
+      document.body.classList.remove("mobile-drawer-open");
+    }
+
     function showView(viewId) {
-      $$(".nav button, .view").forEach((node) => node.classList.remove("active"));
-      $(`.nav button[data-view="${viewId}"]`).classList.add("active");
+      $$(".nav button, .mobile-drawer-nav button, .view").forEach((node) => node.classList.remove("active"));
+      $(`.nav button[data-view="${viewId}"]`)?.classList.add("active");
+      $(`.mobile-drawer-nav button[data-view="${viewId}"]`)?.classList.add("active");
       $(`#${viewId}`).classList.add("active");
       document.body.classList.toggle("assistant-mode", viewId === "assistant");
       document.body.classList.toggle("page-mode", viewId !== "assistant");
       syncAssistantMessageHeight();
+      if (window.matchMedia("(max-width: 780px)").matches) closeMobileDrawer();
       if (window.innerWidth < 1050) window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -571,6 +607,7 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
 
     function connectSpline() {
       if (!SPLINE_SCENE_URL) return;
+      if (window.matchMedia("(max-width: 780px)").matches) return;
       if (!$("#splineBox")) return;
       $("#splineBox").innerHTML = `<iframe title="Spline scene" src="${SPLINE_SCENE_URL}" allow="autoplay; fullscreen; xr-spatial-tracking"></iframe>`;
     }
@@ -593,7 +630,13 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") closeHistoryModal();
       });
+      $("#mobileMenuBtn")?.addEventListener("click", openMobileDrawer);
+      $("#mobileDrawerClose")?.addEventListener("click", closeMobileDrawer);
+      $("#mobileDrawerBackdrop")?.addEventListener("click", closeMobileDrawer);
       window.addEventListener("resize", syncAssistantMessageHeight);
+      window.addEventListener("resize", () => {
+        if (!window.matchMedia("(max-width: 780px)").matches) closeMobileDrawer();
+      });
       syncAssistantMessageHeight();
       document.addEventListener("click", (event) => {
         const composerMenuButton = event.target.closest("#composerMenuBtn");
@@ -605,7 +648,13 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
           return;
         }
 
-        const viewButton = event.target.closest(".nav button[data-view]");
+        const mobileDrawerButton = event.target.closest("#mobileDrawer button[data-view]");
+        if (mobileDrawerButton) {
+          showView(mobileDrawerButton.dataset.view);
+          return;
+        }
+
+        const viewButton = event.target.closest("[data-view]");
         if (viewButton) {
           showView(viewButton.dataset.view);
           return;
@@ -615,6 +664,7 @@ const CURRENT_EMAIL_KEY = "puls_current_email_v1";
         if (!action) return;
         $("#composerMenu")?.classList.remove("show");
         $("#composerMenuBtn")?.setAttribute("aria-expanded", "false");
+        closeMobileDrawer();
         if (event.target.closest("#composerMenuBtn")) return;
         if (action === "dtc") {
           showView("dtc");
