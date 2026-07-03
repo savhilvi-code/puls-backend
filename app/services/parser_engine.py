@@ -11,6 +11,11 @@ try:  # pragma: no cover - optional dependency in some local environments
 except ModuleNotFoundError:  # pragma: no cover
     anthropic = None
 
+try:  # pragma: no cover - optional dependency in some local environments
+    from openai import OpenAI  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    OpenAI = None
+
 from app.schemas.parser import DiagnosticRequest
 
 
@@ -396,6 +401,21 @@ def run_claude_search(client, data: DiagnosticRequest, user_message: str, domain
     )
 
 
+def run_openai_search(client, data: DiagnosticRequest, user_message: str, domains: list[str]):
+    return client.responses.create(
+        model="gpt-4.1-mini",
+        instructions=SYSTEM_PROMPT,
+        input=user_message,
+        max_output_tokens=5000 if data.mode.lower() == "deep" else 4000,
+        tools=[
+            {
+                "type": "web_search_preview",
+                "search_context_size": "high" if data.mode.lower() == "deep" else "medium",
+            }
+        ],
+    )
+
+
 async def diagnose(data: DiagnosticRequest) -> dict:
     mode = data.mode.lower().strip()
     allowed_domains = build_allowed_domains(data)
@@ -410,6 +430,54 @@ async def diagnose(data: DiagnosticRequest) -> dict:
                     mode=mode,
                     source="remote parser api",
                 )
+        except Exception:
+            pass
+
+    context_parts = []
+    if data.car_info:
+        context_parts.append(f"РњР°С€РёРЅР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ: {data.car_info}")
+    if data.conversation_history:
+        context_parts.append(f"РСЃС‚РѕСЂРёСЏ РґРёР°Р»РѕРіР°: {data.conversation_history}")
+    context = "\n".join(context_parts)
+    user_message = (
+        f"{context}\n\n"
+        f"Р—Р°РїСЂРѕСЃ: {data.query}\n"
+        f"РЇР·С‹Рє РѕС‚РІРµС‚Р°: {data.lang}\n"
+        f"Р РµР¶РёРј РїРѕРёСЃРєР°: {mode}\n\n"
+        "РЎРќРђР§РђР›Рђ РїРµСЂРµРІРµРґРё СЃРёРјРїС‚РѕРј РЅР° СЏР·С‹РєРё СЂРµР»РµРІР°РЅС‚РЅС‹С… С„РѕСЂСѓРјРѕРІ, "
+        "Р·Р°С‚РµРј РЅР°Р№РґРё СЂРµР°Р»СЊРЅС‹Рµ С‚РµРјС‹ С‡РµСЂРµР· web_search, "
+        "РїРѕСЃР»Рµ С‡РµРіРѕ РІРµСЂРЅРё РўРћР›Р¬РљРћ РІР°Р»РёРґРЅС‹Р№ JSON."
+    )
+    user_message += (
+        "\n\nРџСЂРёРѕСЂРёС‚РµС‚РЅС‹Рµ Р°РІС‚РѕРјРѕР±РёР»СЊРЅС‹Рµ РґРѕРјРµРЅС‹ РґР»СЏ РїРѕРёСЃРєР°: "
+        + ", ".join(allowed_domains)
+        + "."
+    )
+    if mode == "deep":
+        user_message += (
+            "\n\nР Р•Р–РРњ DEEP SEARCH: РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РїРѕРїСЂРѕСЃРёР» Р±РѕР»СЊС€Рµ РёРЅС„РѕСЂРјР°С†РёРё. "
+            "РС‰Рё РїРѕ СЂР°СЃС€РёСЂРµРЅРЅС‹Рј Р°РІС‚РѕРјРѕР±РёР»СЊРЅС‹Рј С„РѕСЂСѓРјР°Рј, OEM-РєР»СѓР±Р°Рј Рё С‚РµС…РЅРёС‡РµСЃРєРёРј СЃР°Р№С‚Р°Рј. "
+            "РќРµ РїРѕРІС‚РѕСЂСЏР№ СЃС‚Р°СЂС‹Р№ РѕС‚РІРµС‚. РќР°Р№РґРё РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РїСЂРёС‡РёРЅС‹, СЂРµРґРєРёРµ РІРµСЂСЃРёРё, "
+            "РїРѕРґС‚РІРµСЂР¶РґС‘РЅРЅС‹Рµ СЃР»СѓС‡Р°Рё Рё РЅРѕРІС‹Рµ СЂРµР°Р»СЊРЅС‹Рµ СЃСЃС‹Р»РєРё."
+        )
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if openai_key and OpenAI is not None:
+        try:
+            openai_client = OpenAI(api_key=openai_key)
+            openai_response = run_openai_search(openai_client, data, user_message, allowed_domains)
+            openai_text = getattr(openai_response, "output_text", "") or ""
+            openai_result = extract_json(openai_text)
+            openai_result["telegram_text"] = format_for_telegram(openai_result)
+            openai_result["_meta"] = {
+                "engine": "OpenAI web_search",
+                "mode": mode,
+                "allowed_domains": allowed_domains,
+                "fallback_used": False,
+                "version": "7.3",
+            }
+            if not openai_result.get("error"):
+                return openai_result
         except Exception:
             pass
 

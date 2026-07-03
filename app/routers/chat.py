@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.chat import ChatRequest, ChatResponse
@@ -17,6 +19,71 @@ from app.services.user_service import get_or_create_user, update_user_after_resp
 
 router = APIRouter(tags=["chat"])
 
+_CAR_BRANDS = (
+    "toyota",
+    "lexus",
+    "nissan",
+    "infiniti",
+    "honda",
+    "acura",
+    "mazda",
+    "subaru",
+    "mitsubishi",
+    "suzuki",
+    "bmw",
+    "mercedes",
+    "mercedes-benz",
+    "audi",
+    "volkswagen",
+    "vw",
+    "porsche",
+    "opel",
+    "skoda",
+    "seat",
+    "renault",
+    "peugeot",
+    "citroen",
+    "fiat",
+    "alfa romeo",
+    "volvo",
+    "saab",
+    "land rover",
+    "range rover",
+    "jaguar",
+    "mini",
+    "ford",
+    "chevrolet",
+    "cadillac",
+    "gmc",
+    "buick",
+    "dodge",
+    "jeep",
+    "chrysler",
+    "ram",
+    "tesla",
+    "lincoln",
+    "hyundai",
+    "kia",
+    "genesis",
+    "lada",
+    "ваз",
+    "газ",
+    "уаз",
+    "geely",
+    "chery",
+    "byd",
+    "haval",
+    "great wall",
+    "changan",
+    "jac",
+    "exeed",
+    "omoda",
+    "zeekr",
+    "li auto",
+    "nio",
+    "xpeng",
+)
+
 
 def _contains_any_phrase(text: str, phrases: set[str]) -> bool:
     lowered = str(text or "").lower()
@@ -25,6 +92,53 @@ def _contains_any_phrase(text: str, phrases: set[str]) -> bool:
 
 def _normalize_phrase(text: str) -> str:
     return " ".join(str(text or "").lower().split())
+
+
+def _extract_active_car_from_text(text: str) -> str:
+    normalized = re.sub(r"[.,;!?()]+", " ", str(text or "")).strip()
+    if not normalized:
+        return ""
+
+    lowered = normalized.lower()
+    found_brand = ""
+    for brand in _CAR_BRANDS:
+        if brand in lowered:
+            found_brand = brand
+            break
+
+    if not found_brand:
+        return ""
+
+    words = normalized.split()
+    brand_parts = found_brand.split()
+    brand_index = -1
+    for index in range(len(words)):
+        candidate = " ".join(words[index:index + len(brand_parts)]).lower()
+        if candidate == found_brand:
+            brand_index = index
+            break
+
+    if brand_index < 0:
+        return ""
+
+    car_words = words[brand_index:brand_index + 8]
+    result = " ".join(car_words).strip()
+
+    year_match = re.search(r"\b(19[8-9]\d|20[0-3]\d)\b", normalized)
+    engine_match = re.search(
+        r"\b(\d[.,]\d\s?(?:л|литр|liter|l)|v6|v8|v10|v12|i4|i6|tdi|tsi|tfsi|dci|hdi|cdi|"
+        r"m57|n52|n54|n55|b58|m54|2gr|1gr|1zz|2zz|qr20|qr25|sr20|sr20vet|vq35|vk56|om642|"
+        r"k20|k24|j35|ej20|ej25|fa20|fb25|1g-gze|1ggze|gs131)\b",
+        normalized,
+        re.IGNORECASE,
+    )
+
+    if year_match and year_match.group(0) not in result:
+        result = f"{result} {year_match.group(0)}".strip()
+    if engine_match and engine_match.group(0) not in result.lower():
+        result = f"{result} {engine_match.group(0)}".strip()
+
+    return result
 
 
 def _build_parser_history_context(history: str, *, symptom: str, active_car: str, max_blocks: int = 2) -> str:
@@ -138,6 +252,9 @@ def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str
 
 async def handle_message(payload: dict, source: str) -> ChatResponse:
     normalized = normalize_chat_input(payload, source=source)
+    mentioned_car = _extract_active_car_from_text(normalized.text)
+    if mentioned_car:
+        normalized = normalized.model_copy(update={"car_info": mentioned_car})
     user = await get_or_create_user(normalized)
 
     if user.requests_left <= 0:
@@ -155,6 +272,8 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
 
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
+    if mentioned_car:
+        state.active_car = mentioned_car
 
     if (
         _should_force_parser(normalized.text)

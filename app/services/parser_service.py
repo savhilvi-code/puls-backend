@@ -41,6 +41,41 @@ def _normalize_extracted_cases(raw_cases) -> list[dict]:
     return normalized
 
 
+def _build_extracted_cases_from_structured(data: dict) -> list[dict]:
+    causes = data.get("common_causes") if isinstance(data, dict) else []
+    solutions = data.get("solutions") if isinstance(data, dict) else []
+    if not isinstance(causes, list) and not isinstance(solutions, list):
+        return []
+
+    normalized_causes = []
+    for item in causes or []:
+        if isinstance(item, dict):
+            normalized_causes.append(str(item.get("cause") or "").strip())
+        else:
+            normalized_causes.append(str(item or "").strip())
+
+    normalized_solutions = []
+    for item in solutions or []:
+        if isinstance(item, dict):
+            title = str(item.get("title") or "").strip()
+            description = str(item.get("description") or "").strip()
+            normalized_solutions.append("\n".join(part for part in (title, description) if part).strip())
+        else:
+            normalized_solutions.append(str(item or "").strip())
+
+    max_len = max(len(normalized_causes), len(normalized_solutions), 0)
+    extracted_cases = []
+    for index in range(max_len):
+        extracted_cases.append(
+            {
+                "title": f"case_{index + 1}",
+                "cause": normalized_causes[index] if index < len(normalized_causes) else "",
+                "solution": normalized_solutions[index] if index < len(normalized_solutions) else "",
+            }
+        )
+    return extracted_cases
+
+
 def _build_links_from_topics(topics) -> list[dict]:
     if not isinstance(topics, list):
         return []
@@ -121,7 +156,20 @@ async def parse_diagnostic(router_json: dict) -> dict:
     forums_found = data.get("forums_found")
     links = data.get("links", [])
     extracted_cases = data.get("extracted_cases", [])
-    parser_summary = str(data.get("parser_summary") or data.get("summary") or data.get("recommendation") or "")
+    normalized_cases = _normalize_extracted_cases(extracted_cases)
+    if not normalized_cases:
+        normalized_cases = _build_extracted_cases_from_structured(data)
+
+    parser_summary = str(data.get("parser_summary") or data.get("summary") or "").strip()
+    if parser_summary.lower() in {
+        "analysis based on forum topics found",
+        "анализ на основе найденных тем форумов",
+    }:
+        parser_summary = ""
+    if not parser_summary:
+        parser_summary = str(data.get("recommendation") or "").strip()
+    if not parser_summary and normalized_cases:
+        parser_summary = str(normalized_cases[0].get("cause") or normalized_cases[0].get("solution") or "").strip()
 
     normalized_links = _normalize_links(links)
     if not normalized_links:
@@ -132,7 +180,7 @@ async def parse_diagnostic(router_json: dict) -> dict:
     return {
         "forums_found": normalized_forums,
         "links": normalized_links,
-        "extracted_cases": extracted_cases if isinstance(extracted_cases, list) else [],
+        "extracted_cases": normalized_cases,
         "parser_summary": parser_summary,
         "topics_found": topics_found if isinstance(topics_found, list) else [],
         "_raw": data,

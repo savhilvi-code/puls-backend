@@ -351,9 +351,9 @@ async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
     try:
         created = create_knowledge_case(payload)
     except SupabaseUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return None
     except SupabaseOperationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return None
     return created
 
 
