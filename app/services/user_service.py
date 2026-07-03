@@ -1,5 +1,3 @@
-from fastapi import HTTPException
-
 from app.database.supabase import (
     SupabaseOperationError,
     SupabaseUnavailableError,
@@ -16,6 +14,22 @@ from app.schemas.user import UserRecord
 DEFAULT_REQUESTS_LEFT = 5
 
 
+def _build_transient_user(normalized) -> UserRecord:
+    return UserRecord(
+        id=None,
+        auth_user_id=normalized.auth_user_id or "",
+        telegram_id=normalized.telegram_id or "",
+        chat_id=normalized.chat_id or "",
+        email=normalized.email or "",
+        username=normalized.username or normalized.first_name or "",
+        first_name=normalized.first_name or "",
+        car_info=normalized.car_info or "",
+        language=normalized.language or "en",
+        conversation_history="",
+        requests_left=DEFAULT_REQUESTS_LEFT,
+    )
+
+
 async def get_or_create_user(normalized) -> UserRecord:
     try:
         existing = find_user_by_fields(
@@ -23,10 +37,8 @@ async def get_or_create_user(normalized) -> UserRecord:
             telegram_id=normalized.telegram_id,
             email=normalized.email,
         )
-    except SupabaseUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except SupabaseOperationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (SupabaseUnavailableError, SupabaseOperationError):
+        return _build_transient_user(normalized)
 
     if existing is not None:
         return existing
@@ -44,10 +56,8 @@ async def get_or_create_user(normalized) -> UserRecord:
 
     try:
         return create_user_record(payload)
-    except SupabaseUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except SupabaseOperationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (SupabaseUnavailableError, SupabaseOperationError):
+        return _build_transient_user(normalized)
 
 
 async def update_user_after_response(
@@ -92,10 +102,8 @@ async def update_user_after_response(
                 )
             except Exception:
                 pass
-    except SupabaseUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except SupabaseOperationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (SupabaseUnavailableError, SupabaseOperationError):
+        return None
 
 
 def append_history(
