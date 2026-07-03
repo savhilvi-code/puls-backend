@@ -90,7 +90,7 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
     try:
         response = (
             client.table("diagnostic_requests")
-            .select("id,user_id,vehicle_id,vehicle_profile_id,question,answer,language,request_type,status,source,created_at")
+            .select("id,user_id,vehicle_id,vehicle_profile_id,question,answer,language,request_type,status,source,created_at,parser_used,deep_search_used,sources,videos")
             .eq("user_id", resolved_user_id)
             .order("created_at", desc=True)
             .limit(limit)
@@ -114,6 +114,10 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
                 "vehicle": row.get("vehicle_id") or row.get("vehicle_profile_id") or "",
                 "type": row.get("request_type") or "text",
                 "source": row.get("source") or "web",
+                "sources": row.get("sources") or [],
+                "videos": row.get("videos") or [],
+                "parser_used": bool(row.get("parser_used")),
+                "deep_search_used": bool(row.get("deep_search_used")),
                 "created_at": row.get("created_at") or "",
             }
         )

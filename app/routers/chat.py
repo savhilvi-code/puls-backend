@@ -85,6 +85,18 @@ _CAR_BRANDS = (
 )
 
 
+def _quota_payload(user) -> dict:
+    remaining = max(int(getattr(user, "requests_left", 0) or 0), 0)
+    limit = 100 if remaining > 10 else 10
+    return {
+        "remaining": remaining,
+        "used": max(limit - remaining, 0),
+        "limit": limit,
+        "plan_type": "paid" if limit == 100 else "free",
+        "unlimited": False,
+    }
+
+
 def _contains_any_phrase(text: str, phrases: set[str]) -> bool:
     lowered = str(text or "").lower()
     return any(phrase in lowered for phrase in phrases if phrase)
@@ -330,7 +342,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=normalized.text,
             message_type="limit",
         )
-        return ChatResponse(answer=answer, links=[])
+        return ChatResponse(answer=answer, links=[], quota=_quota_payload(user))
 
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
@@ -377,7 +389,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="greeting",
         )
-        return ChatResponse(answer=answer_text, links=[])
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
     if state.needs_car_clarification:
         answer_text = _clarification_text(state.language)
@@ -390,7 +402,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="clarification",
         )
-        return ChatResponse(answer=answer_text, links=[])
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
     if state.needs_problem_clarification:
         answer_text = _fallback_diagnostic_prompt(state.language)
@@ -403,7 +415,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="clarification",
         )
-        return ChatResponse(answer=answer_text, links=[])
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
     if state.is_feedback_helped:
         feedback_state = build_dialog_state(normalized, user, decision)
@@ -426,7 +438,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.previous_symptom or state.current_symptom,
             message_type="feedback_helped",
         )
-        return ChatResponse(answer=answer_text, links=[])
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
     if state.is_feedback_not_helped:
         state.should_deep_search = True
@@ -501,13 +513,13 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 user,
                 normalized,
                 answer_text,
-                should_decrease_limit=bool(state.should_search),
+                should_decrease_limit=False,
                 active_car=state.active_car,
                 symptom=state.current_symptom,
                 message_type="kb_match",
                 links=matched_case_links,
             )
-            return ChatResponse(answer=answer_text, links=matched_case_links)
+            return ChatResponse(answer=answer_text, links=matched_case_links, quota=_quota_payload(user))
 
     if state.should_search:
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
@@ -550,8 +562,10 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
                 symptom=effective_symptom,
                 message_type="parser_fallback",
                 links=[],
+                parser_used=True,
+                deep_search_used=bool(state.should_deep_search),
             )
-            return ChatResponse(answer=answer_text, links=[])
+            return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
         await save_knowledge_case(parser_input, decision, parsed_case)
 
@@ -612,8 +626,11 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
             symptom=effective_symptom,
             message_type="parser",
             links=response_links,
+            parser_used=True,
+            deep_search_used=bool(state.should_deep_search),
+            parsed_case=parsed_case,
         )
-        return ChatResponse(answer=answer_text, links=response_links)
+        return ChatResponse(answer=answer_text, links=response_links, quota=_quota_payload(user))
 
     answer_text = _fallback_diagnostic_prompt(state.language)
     await update_user_after_response(
@@ -625,7 +642,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
         symptom=state.current_symptom,
         message_type="clarification",
     )
-    return ChatResponse(answer=answer_text, links=[])
+    return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
 
 @router.post("/chat", response_model=ChatResponse)

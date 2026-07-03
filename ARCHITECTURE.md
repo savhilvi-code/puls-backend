@@ -19,7 +19,6 @@ PULS backend - FastAPI-сервис для автомобильной диагн
     - health.py
     - history.py
     - search.py
-    - telegram.py
   - schemas/
     - __init__.py
     - chat.py
@@ -35,9 +34,9 @@ PULS backend - FastAPI-сервис для автомобильной диагн
     - openai_service.py
     - parser_engine.py
     - parser_service.py
+    - puls_data_service.py
     - request_journal_service.py
     - router_service.py
-    - telegram_service.py
     - user_service.py
   - utils/
     - __init__.py
@@ -52,7 +51,6 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/routers/health.py`
 - `app/routers/history.py`
 - `app/routers/search.py`
-- `app/routers/telegram.py`
 
 ## Services
 
@@ -64,9 +62,9 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/services/openai_service.py`
 - `app/services/parser_engine.py`
 - `app/services/parser_service.py`
+- `app/services/puls_data_service.py`
 - `app/services/request_journal_service.py`
 - `app/services/router_service.py`
-- `app/services/telegram_service.py`
 - `app/services/user_service.py`
 
 ## Schemas
@@ -104,8 +102,6 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/routers/history.py` -> `app/services/request_journal_service.py`
 - `app/routers/search.py` -> `app/schemas/parser.py`
 - `app/routers/search.py` -> `app/services/parser_service.py`
-- `app/routers/telegram.py` -> `app/routers/chat.py`
-- `app/routers/telegram.py` -> `app/services/telegram_service.py`
 - `app/services/dialog_state_service.py` -> `app/schemas/router.py`
 - `app/services/dialog_state_service.py` -> `app/schemas/user.py`
 - `app/services/kb_service.py` -> `app/database/supabase.py`
@@ -116,6 +112,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/services/parser_engine.py` -> `app/schemas/parser.py`
 - `app/services/parser_service.py` -> `app/schemas/parser.py`
 - `app/services/parser_service.py` -> `app/services/parser_engine.py`
+- `app/services/puls_data_service.py` -> `app/database/supabase.py`
 - `app/services/request_journal_service.py` -> `app/database/supabase.py`
 - `app/services/router_service.py` -> `app/schemas/router.py`
 - `app/services/router_service.py` -> `app/services/openai_service.py`
@@ -132,6 +129,9 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/database/supabase.py`: `knowledge_cases`, `users`
 - `app/services/kb_service.py`: `knowledge_cases`
 - `app/services/request_journal_service.py`: `diagnostic_requests`, `users`
+- `app/services/puls_data_service.py`: `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `video_library`, `user_feedback`, `solved_cases`
+- `db/puls_integration.sql`: `conversations`, `messages`, `parser_runs`, `user_feedback`, `solved_cases`, `video_library`, `vehicle_service_logs`
+- Telegram transport removed: backend is web/API-only.
 
 ## Поток запроса
 

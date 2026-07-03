@@ -13,7 +13,7 @@ PULS - это AI-система для автомобильной диагнос
 - Data: Supabase.
 - AI: OpenAI, Claude.
 - Hosting: Render для backend, GitHub Pages для frontend.
-- Дополнительные интеграции: Telegram Bot, parser/search pipeline.
+- Дополнительные интеграции: parser/search pipeline.
 
 ---
 
@@ -26,7 +26,6 @@ PULS - это AI-система для автомобильной диагнос
 - Supabase хранит пользователей, историю запросов, базу знаний и связанные диагностические данные.
 - OpenAI используется для AI-маршрутизации, генерации ответов и вспомогательных AI-задач.
 - Claude используется для глубокого поиска и анализа через cloud/search-ветку.
-- Telegram Bot исторически был отдельным транспортом для сообщений, но для сайта не должен мешать web-flow.
 - GitHub Pages публикует frontend.
 - Render запускает backend FastAPI.
 
@@ -46,7 +45,6 @@ flowchart LR
     Services --> Supabase
     Backend --> Response[Response]
     Response --> Frontend
-    Telegram[Telegram Bot] -. optional transport .-> Backend
 ```
 
 ---

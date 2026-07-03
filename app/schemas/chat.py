@@ -8,8 +8,6 @@ class NormalizedInput(BaseModel):
     source: str = "web"
     text: str = ""
     auth_user_id: str = ""
-    telegram_id: str = ""
-    chat_id: str = ""
     email: str = ""
     username: str = ""
     first_name: str = ""
@@ -31,3 +29,4 @@ class LinkItem(BaseModel):
 class ChatResponse(BaseModel):
     answer: str = ""
     links: list[LinkItem] = Field(default_factory=list)
+    quota: dict = Field(default_factory=dict)

@@ -38,4 +38,4 @@ This project includes `render.yaml` for a Python web service. On Render, use the
 
 ## Notes
 
-This project keeps the main orchestration in FastAPI while preserving the parser/search flow from the old API service, but without the Telegram transport.
+This project keeps the main orchestration in FastAPI while preserving the parser/search flow from the old API service.

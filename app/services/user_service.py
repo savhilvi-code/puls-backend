@@ -8,18 +8,25 @@ from app.database.supabase import (
     update_conversation_history,
 )
 from app.services.dialog_state_service import history_context_block
-from app.services.request_journal_service import save_diagnostic_request
+from app.services.puls_data_service import (
+    classify_feedback,
+    create_solved_case,
+    get_active_conversation,
+    save_diagnostic_event,
+    save_feedback,
+    save_message,
+    save_parser_run,
+    save_video_library,
+)
 from app.schemas.user import UserRecord
 
-DEFAULT_REQUESTS_LEFT = 5
+DEFAULT_REQUESTS_LEFT = 10
 
 
 def _build_transient_user(normalized) -> UserRecord:
     return UserRecord(
         id=None,
         auth_user_id=normalized.auth_user_id or "",
-        telegram_id=normalized.telegram_id or "",
-        chat_id=normalized.chat_id or "",
         email=normalized.email or "",
         username=normalized.username or normalized.first_name or "",
         first_name=normalized.first_name or "",
@@ -34,7 +41,6 @@ async def get_or_create_user(normalized) -> UserRecord:
     try:
         existing = find_user_by_fields(
             auth_user_id=normalized.auth_user_id,
-            telegram_id=normalized.telegram_id,
             email=normalized.email,
         )
     except (SupabaseUnavailableError, SupabaseOperationError):
@@ -45,7 +51,6 @@ async def get_or_create_user(normalized) -> UserRecord:
 
     payload = {
         "auth_user_id": normalized.auth_user_id or None,
-        "telegram_id": normalized.telegram_id or None,
         "email": normalized.email or None,
         "name": normalized.username or normalized.first_name or "",
         "language": normalized.language or "en",
@@ -70,8 +75,36 @@ async def update_user_after_response(
     symptom: str = "",
     message_type: str = "diagnostic",
     links: list[dict] | None = None,
+    parser_used: bool = False,
+    deep_search_used: bool = False,
+    vehicle_id: int | None = None,
+    vehicle_profile_id: int | None = None,
+    parsed_case: dict | None = None,
 ) -> None:
     try:
+        conversation = get_active_conversation(
+            user_id=user.id,
+            vehicle_id=vehicle_id,
+            title=symptom or normalized.text,
+        )
+        conversation_id = conversation.get("id") if conversation else None
+        save_message(
+            conversation_id=conversation_id,
+            user_id=user.id,
+            vehicle_id=vehicle_id,
+            role="user",
+            text=normalized.text,
+            language=normalized.language,
+        )
+        save_message(
+            conversation_id=conversation_id,
+            user_id=user.id,
+            vehicle_id=vehicle_id,
+            role="assistant",
+            text=answer,
+            language=normalized.language,
+        )
+
         conversation_history = append_history(
             user.conversation_history,
             user_text=normalized.text,
@@ -92,16 +125,62 @@ async def update_user_after_response(
             user.car_info = updated_user.car_info
             user.requests_left = updated_user.requests_left
 
+        diagnostic_request = None
         if user.id is not None and message_type not in {"greeting", "limit"}:
-            try:
-                await save_diagnostic_request(
+            diagnostic_request = save_diagnostic_event(
+                user_id=user.id,
+                conversation_id=conversation_id,
+                vehicle_id=vehicle_id,
+                vehicle_profile_id=vehicle_profile_id,
+                question=normalized.text,
+                answer=answer,
+                language=normalized.language,
+                status=_status_for_message_type(message_type),
+                message_type=message_type,
+                parser_used=parser_used,
+                deep_search_used=deep_search_used,
+                cost_counted=should_decrease_limit,
+                links=links or [],
+            )
+            diagnostic_request_id = diagnostic_request.get("id") if diagnostic_request else None
+            if parsed_case and (parser_used or deep_search_used):
+                save_parser_run(
                     user_id=user.id,
-                    normalized=normalized,
-                    answer=answer,
-                    message_type=message_type,
+                    conversation_id=conversation_id,
+                    vehicle_id=vehicle_id,
+                    diagnostic_request_id=diagnostic_request_id,
+                    run_type="deep_search" if deep_search_used else "parser",
+                    query=symptom or normalized.text,
+                    parsed_case=parsed_case,
                 )
-            except Exception:
-                pass
+            save_video_library(
+                user_id=user.id,
+                vehicle_id=vehicle_id,
+                diagnostic_request_id=diagnostic_request_id,
+                links=links or [],
+                topic=symptom or normalized.text,
+            )
+            feedback_type = classify_feedback(message_type, normalized.text)
+            if feedback_type:
+                save_feedback(
+                    user_id=user.id,
+                    vehicle_id=vehicle_id,
+                    conversation_id=conversation_id,
+                    diagnostic_request_id=diagnostic_request_id,
+                    feedback_type=feedback_type,
+                    feedback_text=normalized.text,
+                )
+            if feedback_type == "helped":
+                create_solved_case(
+                    user_id=user.id,
+                    vehicle_id=vehicle_id,
+                    diagnostic_request_id=diagnostic_request_id,
+                    car_info=active_car or user.car_info or normalized.car_info,
+                    symptoms=symptom,
+                    confirmed_problem=symptom,
+                    confirmed_solution=answer,
+                    links=links or [],
+                )
     except (SupabaseUnavailableError, SupabaseOperationError):
         return None
 
@@ -129,3 +208,16 @@ def append_history(
     if current and current.strip():
         return current.rstrip() + "\n" + entry
     return entry
+
+
+def _status_for_message_type(message_type: str) -> str:
+    message_type = str(message_type or "").strip().lower()
+    if message_type in {"feedback_helped", "resolved"}:
+        return "resolved"
+    if message_type in {"feedback_not_helped", "followup_deep"}:
+        return "need_deep_search"
+    if message_type in {"parser", "parser_fallback", "kb_match"}:
+        return "answered"
+    if message_type == "clarification":
+        return "new"
+    return "new"

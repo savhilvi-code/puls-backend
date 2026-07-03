@@ -14,7 +14,6 @@ drop table if exists users cascade;
 create table users (
   id bigserial primary key,
   email text unique,
-  telegram_id text unique,
   google_id text unique,
   name text,
   language text not null default 'ru',
@@ -166,7 +165,10 @@ create table knowledge_cases (
   confidence numeric(4, 3) not null default 0,
   source_type text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  full_answer text,
+  raw_payload jsonb,
+  forum_links jsonb
 );
 
 create table knowledge_events (
@@ -185,7 +187,6 @@ create table knowledge_events (
 
 create index idx_users_email on users(email);
 create index idx_users_auth_user_id on users(auth_user_id);
-create index idx_users_telegram_id on users(telegram_id);
 create index idx_users_google_id on users(google_id);
 create index idx_user_sessions_user_last_seen on user_sessions(user_id, last_seen_at desc);
 create index idx_subscriptions_user_status on subscriptions(user_id, status);

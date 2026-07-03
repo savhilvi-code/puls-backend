@@ -4,8 +4,6 @@ from pydantic import BaseModel, Field
 class UserRecord(BaseModel):
     id: int | None = None
     auth_user_id: str = ""
-    telegram_id: str = ""
-    chat_id: str = ""
     email: str = ""
     username: str = ""
     first_name: str = ""

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -288,7 +288,6 @@ async def _call_remote_parser(data: DiagnosticRequest, url: str) -> dict:
 
 def _normalize_parser_result(result: dict, *, mode: str, source: str) -> dict:
     payload = dict(result)
-    payload.setdefault("telegram_text", format_for_telegram(payload))
     meta = payload.get("_meta")
     if not isinstance(meta, dict):
         meta = {}
@@ -326,53 +325,6 @@ def extract_json(text: str) -> dict:
         "clarifying_question": "",
         "links": [],
     }
-
-
-def format_for_telegram(result: dict) -> str:
-    if result.get("need_more_info"):
-        return f"🔍 {result.get('clarifying_question', '')}"
-    lines = []
-    total = result.get("total_topics", 0)
-    if total > 0:
-        lines.append(f"📉 Найдено {total} похожих случаев на форумах\n")
-    if result.get("summary"):
-        lines.append(f"🔍 Диагноз:\n{result['summary']}\n")
-    causes = result.get("common_causes", [])
-    if causes:
-        lines.append("⚠️ Основные причины:")
-        for index, cause in enumerate(causes, 1):
-            frequency = cause.get("frequency", "") if isinstance(cause, dict) else ""
-            emoji = {"high": "🔴", "medium": "🟠", "low": "🟡"}.get(frequency, "•")
-            cause_text = cause.get("cause", "") if isinstance(cause, dict) else str(cause)
-            source_langs = cause.get("source_langs", []) if isinstance(cause, dict) else []
-            langs = " ".join(f"[{lang.upper()}]" for lang in source_langs)
-            lines.append(f"{index}. {emoji} {cause_text} {langs}".rstrip())
-        lines.append("")
-    solutions = result.get("solutions", [])
-    if solutions:
-        lines.append("🛠 Шаги диагностики:")
-        for index, solution in enumerate(solutions, 1):
-            if isinstance(solution, dict):
-                lines.append(f"{index}. {solution.get('title', '')}")
-                lines.append(f"   {solution.get('description', '')}")
-            else:
-                lines.append(f"{index}. {solution}")
-        lines.append("")
-    topics = result.get("topics_found", [])
-    if topics:
-        lines.append("🔗 Источники с форумов:")
-        for topic in topics[:5]:
-            if not isinstance(topic, dict):
-                continue
-            lines.append(f"• [{topic.get('forum', '')}] {topic.get('title', '')}")
-            if topic.get("key_info"):
-                lines.append(f"  💡 {topic['key_info']}")
-            if topic.get("url"):
-                lines.append(f"  {topic['url']}")
-        lines.append("")
-    if result.get("recommendation"):
-        lines.append(f"💡 Рекомендация эксперта:\n{result['recommendation']}")
-    return "\n".join(lines)
 
 
 def collect_response_text(response) -> str:
@@ -621,7 +573,6 @@ def _legacy_1g_gze_airflow_result(data: DiagnosticRequest) -> dict | None:
         "need_more_info": False,
         "clarifying_question": "",
     }
-    result["telegram_text"] = format_for_telegram(result)
     result["_meta"] = {
         "engine": "legacy 1G-GZE airflow knowledge",
         "mode": data.mode.lower().strip(),
@@ -700,7 +651,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
                 openai_response = run_openai_search(openai_client, data, attempt_message, allowed_domains)
                 openai_text = getattr(openai_response, "output_text", "") or ""
                 openai_result = extract_json(openai_text)
-                openai_result["telegram_text"] = format_for_telegram(openai_result)
                 openai_result["_meta"] = {
                     "engine": "OpenAI web_search",
                     "mode": mode,
@@ -728,7 +678,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
             "recommendation": "",
             "need_more_info": False,
             "clarifying_question": "",
-            "telegram_text": "Сервис поиска временно недоступен. Повторите запрос позже.",
             "_meta": {
                 "mode": mode,
                 "allowed_domains": allowed_domains,
@@ -782,7 +731,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
 
         raw_text = collect_response_text(response)
         result = extract_json(raw_text)
-        result["telegram_text"] = format_for_telegram(result)
         result["_meta"] = {
             "engine": "Claude Haiku 4.5 + web_search",
             "mode": mode,
@@ -804,7 +752,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
             "recommendation": "",
             "need_more_info": False,
             "clarifying_question": "",
-            "telegram_text": "Сервис поиска временно недоступен. Повторите запрос позже.",
             "_meta": {
                 "mode": mode,
                 "allowed_domains": used_domains,

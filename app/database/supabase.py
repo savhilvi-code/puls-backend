@@ -45,8 +45,6 @@ def _map_user_row(row: dict[str, Any]):
     return UserRecord(
         id=row.get("id"),
         auth_user_id=row.get("auth_user_id") or "",
-        telegram_id=row.get("telegram_id") or "",
-        chat_id=row.get("chat_id") or "",
         email=row.get("email") or "",
         username=row.get("name") or "",
         first_name="",
@@ -57,15 +55,13 @@ def _map_user_row(row: dict[str, Any]):
     )
 
 
-def find_user_by_fields(*, auth_user_id: str = "", telegram_id: str = "", email: str = ""):
+def find_user_by_fields(*, auth_user_id: str = "", email: str = ""):
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
 
     filters = []
     if auth_user_id:
         filters.append(("auth_user_id", auth_user_id))
-    if telegram_id:
-        filters.append(("telegram_id", telegram_id))
     if email:
         filters.append(("email", email))
 
