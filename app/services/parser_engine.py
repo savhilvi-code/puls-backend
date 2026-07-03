@@ -650,7 +650,7 @@ async def diagnose(data: DiagnosticRequest) -> dict:
             pass
 
     legacy_result = _legacy_1g_gze_airflow_result(data)
-    if legacy_result:
+    if legacy_result and mode != "deep":
         return legacy_result
 
     context_parts = []
@@ -682,7 +682,7 @@ async def diagnose(data: DiagnosticRequest) -> dict:
         )
 
     openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if openai_key and OpenAI is not None:
+    if mode != "deep" and openai_key and OpenAI is not None:
         try:
             openai_client = OpenAI(api_key=openai_key)
             search_hints = _build_search_hints(data)
