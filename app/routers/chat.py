@@ -141,6 +141,32 @@ def _extract_active_car_from_text(text: str) -> str:
     return result
 
 
+def _looks_like_generic_component_query(text: str, active_car: str = "") -> bool:
+    if active_car:
+        return False
+    lowered = _normalize_phrase(text)
+    component_terms = (
+        "расходомер",
+        "дмрв",
+        "maf",
+        "map",
+        "турбина",
+        "дроссель",
+        "форсун",
+        "генератор",
+        "датчик",
+    )
+    if not any(term in lowered for term in component_terms):
+        return False
+    if _extract_active_car_from_text(text):
+        return False
+    if re.search(r"\b(19[8-9]\d|20[0-3]\d)\b", lowered):
+        return False
+    if re.search(r"\b(1g-gze|1ggze|sr20vet|qr20|qr25|2gr|1gr|1zz|2zz|ej20|ej25|k20|k24)\b", lowered):
+        return False
+    return True
+
+
 def _build_parser_history_context(history: str, *, symptom: str, active_car: str, max_blocks: int = 2) -> str:
     blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
     if not blocks:
@@ -161,6 +187,42 @@ def _build_parser_history_context(history: str, *, symptom: str, active_car: str
 
     selected.reverse()
     return "\n---\n".join(selected)[:4000]
+
+
+def _looks_like_info_followup(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    phrases = (
+        "дай больше информации",
+        "больше информации",
+        "подробнее",
+        "распиши подробнее",
+        "подробней",
+        "подробно",
+        "еще информации",
+        "ещё информации",
+        "more information",
+        "more details",
+        "tell me more",
+        "go deeper",
+        "deeper",
+    )
+    return any(phrase in lowered for phrase in phrases)
+
+
+def _extract_last_search_symptom(history: str) -> str:
+    blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
+    for block in reversed(blocks):
+        message_type = ""
+        symptom = ""
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if line.lower().startswith("message_type:"):
+                message_type = line.split(":", 1)[1].strip().lower()
+            elif line.lower().startswith("symptom:"):
+                symptom = line.split(":", 1)[1].strip()
+        if message_type in {"parser", "parser_fallback", "kb_match"} and symptom and not _looks_like_info_followup(symptom):
+            return symptom
+    return ""
 
 
 def _should_use_history_for_parser(state, decision) -> bool:
@@ -275,8 +337,17 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
     if mentioned_car:
         state.active_car = mentioned_car
 
+    generic_component_query = _looks_like_generic_component_query(normalized.text, state.active_car)
+
+    if generic_component_query:
+        state.needs_car_clarification = True
+        state.needs_problem_clarification = False
+        state.should_search = False
+        state.should_deep_search = False
+
     if (
         _should_force_parser(normalized.text)
+        and not generic_component_query
         and not state.is_greeting
         and not state.is_feedback_helped
         and not state.is_feedback_not_helped
@@ -284,6 +355,16 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
         state.needs_car_clarification = False
         state.needs_problem_clarification = False
         state.should_search = True
+
+    if _looks_like_info_followup(normalized.text) and user.conversation_history:
+        state.needs_car_clarification = False
+        state.needs_problem_clarification = False
+        state.should_search = True
+        state.should_deep_search = True
+        previous_search_symptom = _extract_last_search_symptom(user.conversation_history)
+        if previous_search_symptom:
+            state.previous_symptom = previous_search_symptom
+            state.current_symptom = previous_search_symptom
 
     if state.is_greeting:
         answer_text = _greeting_text(state.language, decision.response)
@@ -350,7 +431,11 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
     if state.is_feedback_not_helped:
         state.should_deep_search = True
         state.should_search = True
-        if not state.current_symptom and state.previous_symptom:
+        previous_search_symptom = _extract_last_search_symptom(user.conversation_history)
+        if previous_search_symptom:
+            state.previous_symptom = previous_search_symptom
+            state.current_symptom = previous_search_symptom
+        elif not state.current_symptom and state.previous_symptom:
             state.current_symptom = state.previous_symptom
         if not state.active_car and user.car_info:
             state.active_car = user.car_info
@@ -359,7 +444,7 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
     matched_case_answer = ""
     matched_case_links = []
     matched_case_is_placeholder = False
-    if state.should_search and not state.should_deep_search:
+    if state.should_search and not state.should_deep_search and not _looks_like_info_followup(normalized.text):
         matched_case = await find_matching_case(state, decision)
         matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
         matched_case_links = (matched_case or {}).get("links", [])
