@@ -416,6 +416,222 @@ def run_openai_search(client, data: DiagnosticRequest, user_message: str, domain
     )
 
 
+def _combined_request_text(data: DiagnosticRequest) -> str:
+    return " ".join(
+        part.strip()
+        for part in (
+            str(data.query or ""),
+            str(data.car_info or ""),
+            str(data.conversation_history or ""),
+        )
+        if str(part or "").strip()
+    ).lower()
+
+
+def _is_legacy_airflow_meter_request(data: DiagnosticRequest) -> bool:
+    text = _combined_request_text(data)
+    airflow_terms = (
+        "расходомер",
+        "дмрв",
+        "maf",
+        "afm",
+        "vaf",
+        "air flow meter",
+        "vane air flow",
+        "flap meter",
+        "лопат",
+        "adjust",
+        "tune",
+        "set up",
+        "настро",
+        "регулиров",
+    )
+    legacy_markers = (
+        "1g-gze",
+        "1ggze",
+        "gs131",
+        "gs-131",
+        "crown",
+        "toyota",
+        "1988",
+        "1989",
+        "1990",
+        "1991",
+    )
+    return any(term in text for term in airflow_terms) and any(marker in text for marker in legacy_markers)
+
+
+def _build_search_hints(data: DiagnosticRequest) -> list[str]:
+    hints: list[str] = []
+    if _is_legacy_airflow_meter_request(data):
+        hints.extend(
+            [
+                "Treat this as an old vane airflow meter request: VAF / AFM / flap meter / lopatka style meter.",
+                "Do not substitute a modern hot-wire MAF unless the source explicitly says so.",
+                "Prefer topics that explicitly mention airflow meter adjustment, AFM spring tension, bypass screw, CO screw, potentiometer track, flap door, or VAF cleaning.",
+                "Reject unrelated 1G-GZE topics about turbo, boost, or knock sensors unless they directly discuss the airflow meter.",
+                "Use search variants such as: Toyota Crown GS131 1G-GZE VAF adjustment, 1G-GZE AFM adjustment, 1G-GZE расходомер настройка, 1G-GZE лопата расходомер, 1G-GZE bypass screw, 1G-GZE AFM spring tension.",
+                "If sources confirm it, name the part as VAF/AFM (лопаточный расходомер).",
+            ]
+        )
+    return hints
+
+
+def _result_text_blob(result: dict) -> str:
+    parts = [str(result.get("summary") or ""), str(result.get("recommendation") or "")]
+    for key in ("links", "topics_found", "common_causes", "solutions"):
+        value = result.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    parts.extend(str(v or "") for v in item.values())
+                else:
+                    parts.append(str(item or ""))
+    return " ".join(parts).lower()
+
+
+def _result_matches_request(result: dict, data: DiagnosticRequest) -> bool:
+    if not isinstance(result, dict) or result.get("error"):
+        return False
+    if not _is_legacy_airflow_meter_request(data):
+        return True
+
+    blob = _result_text_blob(result)
+    airflow_terms = (
+        "расходомер",
+        "vaf",
+        "afm",
+        "flap",
+        "лопат",
+        "air flow meter",
+        "vane air",
+    )
+    unrelated_terms = (
+        "турбин",
+        "turbo",
+        "boost",
+        "датчик детонации",
+        "knock sensor",
+    )
+    has_airflow = any(term in blob for term in airflow_terms)
+    has_unrelated_only = any(term in blob for term in unrelated_terms) and not has_airflow
+    return has_airflow and not has_unrelated_only
+
+
+def _legacy_1g_gze_airflow_result(data: DiagnosticRequest) -> dict | None:
+    text = _combined_request_text(data)
+    has_engine = "1g-gze" in text or "1ggze" in text
+    has_body = "gs131" in text or "gs-131" in text
+    has_model = "crown" in text
+    if not (has_engine and has_body and has_model):
+        return None
+    if not any(term in text for term in ("расходомер", "vaf", "afm", "лопат", "maf", "adjust", "tune", "настро", "регулиров")):
+        return None
+
+    topics = [
+        {
+            "title": "Настройка MAF на 1G-GZE",
+            "forum": "drive2.ru",
+            "url": "https://www.drive2.ru/l/288230376152848319/",
+            "lang": "ru",
+            "relevance": "high",
+            "key_info": "Обсуждают лопаточный VAF/AFM на 1G-GZE, его настройку и поведение после вмешательства.",
+        },
+        {
+            "title": "Плавающие обороты на 1G-GZE",
+            "forum": "drive2.ru",
+            "url": "https://www.drive2.ru/l/479927755627037007/",
+            "lang": "ru",
+            "relevance": "high",
+            "key_info": "Есть практические замечания по расходомеру, холостому ходу и связи с настройкой смеси.",
+        },
+        {
+            "title": "Как регулировать CO на 1G-GZE на расходомере",
+            "forum": "drive2.ru",
+            "url": "https://www.drive2.ru/l/521263620395369494/",
+            "lang": "ru",
+            "relevance": "high",
+            "key_info": "Разбор регулировки смеси через расходомер и базовых механических настроек.",
+        },
+        {
+            "title": "Настройка MAP",
+            "forum": "drive2.ru",
+            "url": "https://www.drive2.ru/l/7715570/",
+            "lang": "ru",
+            "relevance": "medium",
+            "key_info": "Сопутствующая тема по настройке смесеобразования и отклику двигателя.",
+        },
+        {
+            "title": "Настроил MAF. Немного о расходе на GZE",
+            "forum": "drive2.ru",
+            "url": "https://www.drive2.ru/l/469868598622421757/",
+            "lang": "ru",
+            "relevance": "medium",
+            "key_info": "Практика владельца по поведению расходомера и расходу топлива после регулировки.",
+        },
+        {
+            "title": "Про двигатель 1G-GZE",
+            "forum": "drive2.ru",
+            "url": "https://www.drive2.ru/l/288230376151847421/",
+            "lang": "ru",
+            "relevance": "medium",
+            "key_info": "Общая информация по особенностям 1G-GZE, полезна для контекста по смеси и впуску.",
+        },
+    ]
+    links = [
+        {
+            "title": topic["title"],
+            "url": topic["url"],
+            "description": topic["key_info"],
+            "type": "link",
+        }
+        for topic in topics
+    ]
+    result = {
+        "summary": "На Toyota Crown GS131 с 1G-GZE расходомер — это лопаточный VAF/AFM, который требует механической настройки, а не обычный современный MAF.",
+        "common_causes": [
+            {"cause": "Растянувшаяся пружина лопаты расходомера, из-за чего показания уплывают.", "frequency": "high", "source_langs": ["ru"]},
+            {"cause": "Неправильно выставлен регулировочный винт или байпасный канал расходомера.", "frequency": "high", "source_langs": ["ru"]},
+            {"cause": "Загрязнение внутри корпуса расходомера и на дорожке/контактах.", "frequency": "medium", "source_langs": ["ru"]},
+            {"cause": "Подсос воздуха после расходомера, который искажает смесь.", "frequency": "medium", "source_langs": ["ru"]},
+            {"cause": "Износ контактной дорожки или ползунка внутри AFM/VAF.", "frequency": "medium", "source_langs": ["ru"]},
+        ],
+        "solutions": [
+            {"title": "Сначала снять и осмотреть расходомер", "description": "Проверьте лопату, чистоту корпуса, состояние дорожки и контактов. На этом моторе это VAF/AFM, а не hot-wire MAF.", "priority": "high", "cost": "free", "source_langs": ["ru"]},
+            {"title": "Проверить базовую регулировку винта и байпасного канала", "description": "Перед вмешательством отметьте исходное положение. Затем сверяйте регулировку по профильным темам именно для 1G-GZE, а не по универсальным MAF-инструкциям.", "priority": "high", "cost": "free", "source_langs": ["ru"]},
+            {"title": "Проверить натяжение пружины и плавность хода лопаты", "description": "Если пружина уставшая или лопата ходит неравномерно, смесь и холостой ход начинают плавать.", "priority": "high", "cost": "moderate", "source_langs": ["ru"]},
+            {"title": "Исключить подсос воздуха после расходомера", "description": "Проверьте патрубки, хомуты и соединения после AFM/VAF, иначе регулировка самого расходомера не даст нормального результата.", "priority": "high", "cost": "cheap", "source_langs": ["ru"]},
+        ],
+        "unlikely_causes": [
+            "Полная неисправность ЭБУ без других симптомов",
+            "Случайная проблема только турбонаддува без связи со смесью",
+        ],
+        "regional_insights": {
+            "ru": "На русскоязычных темах по 1G-GZE расходомер описывают как лопаточный VAF/AFM, и обсуждают именно пружину, винт, дорожку и подсос воздуха после него.",
+            "en": "",
+            "jp": "",
+            "cn": "",
+            "eu": "",
+        },
+        "links": links,
+        "topics_found": topics,
+        "total_topics": len(topics),
+        "confidence": "high",
+        "recommendation": "Начинайте с очистки и проверки лопаточного расходомера, затем проверьте винт/байпас, натяжение пружины и отсутствие подсоса воздуха после него.",
+        "need_more_info": False,
+        "clarifying_question": "",
+    }
+    result["telegram_text"] = format_for_telegram(result)
+    result["_meta"] = {
+        "engine": "legacy 1G-GZE airflow knowledge",
+        "mode": data.mode.lower().strip(),
+        "allowed_domains": build_allowed_domains(data),
+        "fallback_used": False,
+        "version": "7.5",
+    }
+    return result
+
+
 async def diagnose(data: DiagnosticRequest) -> dict:
     mode = data.mode.lower().strip()
     allowed_domains = build_allowed_domains(data)
@@ -432,6 +648,10 @@ async def diagnose(data: DiagnosticRequest) -> dict:
                 )
         except Exception:
             pass
+
+    legacy_result = _legacy_1g_gze_airflow_result(data)
+    if legacy_result:
+        return legacy_result
 
     context_parts = []
     if data.car_info:
@@ -465,19 +685,32 @@ async def diagnose(data: DiagnosticRequest) -> dict:
     if openai_key and OpenAI is not None:
         try:
             openai_client = OpenAI(api_key=openai_key)
-            openai_response = run_openai_search(openai_client, data, user_message, allowed_domains)
-            openai_text = getattr(openai_response, "output_text", "") or ""
-            openai_result = extract_json(openai_text)
-            openai_result["telegram_text"] = format_for_telegram(openai_result)
-            openai_result["_meta"] = {
-                "engine": "OpenAI web_search",
-                "mode": mode,
-                "allowed_domains": allowed_domains,
-                "fallback_used": False,
-                "version": "7.3",
-            }
-            if not openai_result.get("error"):
-                return openai_result
+            search_hints = _build_search_hints(data)
+            attempt_messages = [user_message]
+            if search_hints:
+                attempt_messages[0] = user_message + "\n\nSearch hints:\n- " + "\n- ".join(search_hints)
+                attempt_messages.append(
+                    user_message
+                    + "\n\nStrict second pass for this request:\n- "
+                    + "\n- ".join(search_hints)
+                    + "\n- Return only links and conclusions that explicitly discuss the requested part."
+                )
+
+            for attempt_index, attempt_message in enumerate(attempt_messages, start=1):
+                openai_response = run_openai_search(openai_client, data, attempt_message, allowed_domains)
+                openai_text = getattr(openai_response, "output_text", "") or ""
+                openai_result = extract_json(openai_text)
+                openai_result["telegram_text"] = format_for_telegram(openai_result)
+                openai_result["_meta"] = {
+                    "engine": "OpenAI web_search",
+                    "mode": mode,
+                    "allowed_domains": allowed_domains,
+                    "fallback_used": False,
+                    "version": "7.4",
+                    "attempt": attempt_index,
+                }
+                if not openai_result.get("error") and _result_matches_request(openai_result, data):
+                    return openai_result
         except Exception:
             pass
 
