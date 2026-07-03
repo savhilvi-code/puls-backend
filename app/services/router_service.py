@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from fastapi import HTTPException
-
 from app.schemas.router import RouterDecision
 from app.services.openai_service import OpenAIRouterUnavailableError, classify_message
 from app.utils.language import normalize_language_code
@@ -157,7 +155,7 @@ def _local_router(text: str, language: str) -> RouterDecision:
             car_info="",
             active_car="",
             symptom="",
-            response="Hi! Describe the car issue and I'll help.",
+            response="",
         )
 
     if any(token in lowered for token in negative):
@@ -174,7 +172,7 @@ def _local_router(text: str, language: str) -> RouterDecision:
             car_info="",
             active_car="",
             symptom=text[:120],
-            response="Let's dig deeper.",
+            response="",
         )
 
     if any(token in lowered for token in positive):
@@ -191,7 +189,7 @@ def _local_router(text: str, language: str) -> RouterDecision:
             car_info="",
             active_car="",
             symptom="",
-            response="Glad it helped.",
+            response="",
         )
 
     need_car_info = not bool(text)
@@ -226,8 +224,10 @@ async def route_message(normalized, user) -> RouterDecision:
             conversation_history=user.conversation_history,
         )
         return _stabilize_decision(normalized.text, user, ai_decision)
-    except OpenAIRouterUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OpenAIRouterUnavailableError:
+        return _stabilize_decision(normalized.text, user, _local_router(normalized.text, normalized.language))
+    except Exception:
+        return _stabilize_decision(normalized.text, user, _local_router(normalized.text, normalized.language))
 
 
 def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDecision:

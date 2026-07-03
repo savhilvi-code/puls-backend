@@ -79,6 +79,21 @@ def _build_forums_found(topics) -> list[str]:
     return forums
 
 
+def _has_usable_payload(data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if data.get("error"):
+        return False
+    if bool(data.get("need_more_info")):
+        return True
+    for key in ("parser_summary", "summary", "recommendation"):
+        if str(data.get(key) or "").strip():
+            return True
+    if data.get("links") or data.get("topics_found") or data.get("extracted_cases"):
+        return True
+    return False
+
+
 async def parse_diagnostic(router_json: dict) -> dict:
     deep_search = bool(router_json.get("deep_search", False))
     query = str(
@@ -97,6 +112,10 @@ async def parse_diagnostic(router_json: dict) -> dict:
     )
 
     data = await diagnose(payload)
+    if not _has_usable_payload(data):
+        raise ParserUnavailableError(
+            str(data.get("error") or data.get("summary") or "Parser returned no usable data.")
+        )
 
     topics_found = data.get("topics_found", [])
     forums_found = data.get("forums_found")

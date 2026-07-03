@@ -13,9 +13,9 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PARSER_API_URL
         sync: false
       - key: FRONTEND_API_URL
         value: /chat

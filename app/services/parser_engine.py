@@ -4,7 +4,12 @@ import json
 import os
 import re
 
-import anthropic
+import httpx
+
+try:  # pragma: no cover - optional dependency in some local environments
+    import anthropic  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    anthropic = None
 
 from app.schemas.parser import DiagnosticRequest
 
@@ -247,6 +252,48 @@ def build_allowed_domains(data: DiagnosticRequest) -> list[str]:
     return unique_domains(domains)
 
 
+def _remote_parser_url() -> str:
+    raw = str(os.getenv("PARSER_API_URL", "") or "").strip() or "https://car-diagnostic-api.onrender.com/search"
+    if not raw:
+        return ""
+    lowered = raw.lower().rstrip("/")
+    if lowered.endswith("/diagnose") or lowered.endswith("/search"):
+        return raw
+    return raw.rstrip("/") + "/diagnose"
+
+
+async def _call_remote_parser(data: DiagnosticRequest, url: str) -> dict:
+    payload = {
+        "query": data.query,
+        "lang": data.lang,
+        "car_info": data.car_info,
+        "conversation_history": data.conversation_history,
+        "mode": data.mode,
+    }
+
+    async with httpx.AsyncClient(timeout=90) as client:
+        response = await client.post(url, json=payload)
+
+    response.raise_for_status()
+    parsed = response.json()
+    if not isinstance(parsed, dict):
+        raise ValueError("Parser API returned a non-object JSON payload.")
+    return parsed
+
+
+def _normalize_parser_result(result: dict, *, mode: str, source: str) -> dict:
+    payload = dict(result)
+    payload.setdefault("telegram_text", format_for_telegram(payload))
+    meta = payload.get("_meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    meta.setdefault("engine", source)
+    meta.setdefault("mode", mode)
+    meta.setdefault("version", "7.2")
+    payload["_meta"] = meta
+    return payload
+
+
 def extract_json(text: str) -> dict:
     cleaned = re.sub(r"```(?:json)?\s*", "", text)
     cleaned = re.sub(r"```\s*", "", cleaned).strip()
@@ -350,12 +397,46 @@ def run_claude_search(client, data: DiagnosticRequest, user_message: str, domain
 
 
 async def diagnose(data: DiagnosticRequest) -> dict:
+    mode = data.mode.lower().strip()
+    allowed_domains = build_allowed_domains(data)
+    remote_url = _remote_parser_url()
+
+    if remote_url:
+        try:
+            remote_result = await _call_remote_parser(data, remote_url)
+            if not remote_result.get("error"):
+                return _normalize_parser_result(
+                    remote_result,
+                    mode=mode,
+                    source="remote parser api",
+                )
+        except Exception:
+            pass
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return {"error": "ANTHROPIC_API_KEY not set"}
+    if not api_key or anthropic is None:
+        return {
+            "error": "ANTHROPIC_API_KEY not set" if not api_key else "anthropic package is not installed",
+            "summary": "Сервис поиска временно недоступен. Повторите запрос позже.",
+            "common_causes": [],
+            "solutions": [],
+            "topics_found": [],
+            "links": [],
+            "total_topics": 0,
+            "confidence": "low",
+            "recommendation": "",
+            "need_more_info": False,
+            "clarifying_question": "",
+            "telegram_text": "Сервис поиска временно недоступен. Повторите запрос позже.",
+            "_meta": {
+                "mode": mode,
+                "allowed_domains": allowed_domains,
+                "fallback_used": False,
+                "version": "7.2",
+            },
+        }
 
     client = anthropic.Anthropic(api_key=api_key)
-    mode = data.mode.lower().strip()
     context_parts = []
     if data.car_info:
         context_parts.append(f"Машина пользователя: {data.car_info}")
@@ -406,7 +487,7 @@ async def diagnose(data: DiagnosticRequest) -> dict:
             "mode": mode,
             "allowed_domains": used_domains,
             "fallback_used": fallback_used,
-            "version": "7.1",
+            "version": "7.2",
         }
         return result
     except Exception as error:
@@ -427,6 +508,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
                 "mode": mode,
                 "allowed_domains": used_domains,
                 "fallback_used": fallback_used,
-                "version": "7.1",
+                "version": "7.2",
             },
         }
