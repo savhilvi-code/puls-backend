@@ -81,6 +81,41 @@ def _fallback_diagnostic_prompt(language: str) -> str:
     return "Describe the problem with the car and I’ll start the diagnosis."
 
 
+def _should_force_parser(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    parser_triggers = (
+        "как ",
+        "почему",
+        "настро",
+        "регулиров",
+        "расходомер",
+        "дмрв",
+        "maf",
+        "не ",
+        "ошиб",
+        "шум",
+        "стук",
+        "свист",
+        "дым",
+        "тяг",
+        "турб",
+        "check",
+        "obd",
+        "how to",
+        "replace",
+        "adjust",
+        "tune",
+        "fix",
+        "repair",
+        "noise",
+        "stall",
+        "power",
+    )
+    return any(token in lowered for token in parser_triggers) or len(lowered.split()) >= 4
+
+
 def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str) -> str:
     if language == "ru":
         parts = [
@@ -120,6 +155,16 @@ async def handle_message(payload: dict, source: str) -> ChatResponse:
 
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
+
+    if (
+        _should_force_parser(normalized.text)
+        and not state.is_greeting
+        and not state.is_feedback_helped
+        and not state.is_feedback_not_helped
+    ):
+        state.needs_car_clarification = False
+        state.needs_problem_clarification = False
+        state.should_search = True
 
     if state.is_greeting:
         answer_text = _greeting_text(state.language, decision.response)
