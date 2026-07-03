@@ -23,6 +23,7 @@ PULS - это AI-система для автомобильной диагнос
 
 - Frontend отвечает за интерфейс сайта, страницы, ввод пользователя, отображение ответа и вызовы backend API.
 - Backend принимает API-запросы, маршрутизирует диалог, запускает AI, parser, knowledge base и работу с Supabase.
+- PULS Decision Engine внутри backend является единым центром принятия решений для `/chat`: определяет автомобиль, проверяет knowledge/history, выбирает Parser или Deep Search, контролирует лимиты и feedback-flow.
 - Supabase хранит пользователей, историю запросов, базу знаний и связанные диагностические данные.
 - OpenAI используется для AI-маршрутизации, генерации ответов и вспомогательных AI-задач.
 - Claude используется для глубокого поиска и анализа через cloud/search-ветку.
@@ -36,7 +37,8 @@ flowchart LR
     Frontend --> APIConfig[API Config]
     APIConfig --> Backend[Backend FastAPI on Render]
     Backend --> Routers[Routers]
-    Routers --> Services[Services]
+    Routers --> Decision[Decision Engine]
+    Decision --> Services[Services]
     Services --> OpenAI[OpenAI]
     Services --> Claude[Claude]
     Services --> Parser[Parser / Deep Search]
@@ -88,6 +90,7 @@ flowchart LR
 Ключевые части backend:
 
 - routers - API endpoints и маршруты FastAPI.
+- decision engine - единый backend-центр обработки `/chat`, выбора knowledge_cases, Parser, Deep Search, feedback и списания лимитов.
 - services - бизнес-логика, AI, parser, formatter, users, history.
 - schemas - Pydantic-схемы запросов и ответов.
 - database - Supabase client и работа с базой.

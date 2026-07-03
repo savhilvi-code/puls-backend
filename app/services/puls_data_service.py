@@ -71,6 +71,64 @@ def classify_feedback(message_type: str, text: str) -> str:
     return ""
 
 
+def _vehicle_match_score(vehicle: dict, car_text: str) -> int:
+    text = " ".join(str(car_text or "").lower().split())
+    if not text:
+        return 0
+
+    fields = {
+        "brand": str(vehicle.get("brand") or "").lower(),
+        "model": str(vehicle.get("model") or "").lower(),
+        "engine": str(vehicle.get("engine") or "").lower(),
+        "year": str(vehicle.get("year") or "").lower(),
+        "nickname": str(vehicle.get("nickname") or "").lower(),
+        "vin": str(vehicle.get("vin") or "").lower(),
+    }
+
+    score = 0
+    for key, value in fields.items():
+        if not value:
+            continue
+        if value in text:
+            score += 4 if key in {"brand", "model"} else 2
+        elif any(part and part in text for part in value.replace("-", " ").split()):
+            score += 1
+    return score
+
+
+def resolve_user_vehicle(*, user_id: int | None, car_text: str) -> dict | None:
+    if user_id is None:
+        return None
+
+    def operation():
+        response = (
+            get_supabase_client()
+            .table("vehicles")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+        vehicles = _rows(response)
+        if not vehicles:
+            return None
+
+        scored = sorted(
+            ((vehicle, _vehicle_match_score(vehicle, car_text)) for vehicle in vehicles),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        best_vehicle, best_score = scored[0]
+        if best_score >= 2:
+            return best_vehicle
+        if len(vehicles) == 1 and not str(car_text or "").strip():
+            return vehicles[0]
+        return None
+
+    return _safe_execute(operation)
+
+
 def get_active_conversation(*, user_id: int | None, vehicle_id: int | None = None, title: str = "") -> dict | None:
     if user_id is None:
         return None
@@ -305,3 +363,51 @@ def create_solved_case(
         return rows[0] if rows else None
 
     return _safe_execute(operation)
+
+
+def get_latest_answered_diagnostic_request(*, user_id: int | None, conversation_id: int | None = None, exclude_id: int | None = None) -> dict | None:
+    if user_id is None:
+        return None
+
+    def operation():
+        query = (
+            get_supabase_client()
+            .table("diagnostic_requests")
+            .select("id,user_id,vehicle_id,conversation_id,question,raw_question,symptoms,answer,sources,videos,parser_used,deep_search_used,status,created_at")
+            .eq("user_id", user_id)
+            .in_("status", ["answered", "need_deep_search", "not_resolved"])
+            .order("created_at", desc=True)
+            .limit(10)
+        )
+        if conversation_id:
+            query = query.eq("conversation_id", conversation_id)
+        response = query.execute()
+        for row in _rows(response):
+            if exclude_id and row.get("id") == exclude_id:
+                continue
+            if str(row.get("answer") or "").strip():
+                return row
+        return None
+
+    return _safe_execute(operation)
+
+
+def create_solved_case_from_diagnostic(
+    *,
+    user_id: int | None,
+    vehicle_id: int | None,
+    diagnostic_request: dict | None,
+    car_info: str,
+) -> dict | None:
+    if not diagnostic_request:
+        return None
+    return create_solved_case(
+        user_id=user_id,
+        vehicle_id=vehicle_id or diagnostic_request.get("vehicle_id"),
+        diagnostic_request_id=diagnostic_request.get("id"),
+        car_info=car_info,
+        symptoms=str(diagnostic_request.get("symptoms") or diagnostic_request.get("raw_question") or diagnostic_request.get("question") or ""),
+        confirmed_problem=str(diagnostic_request.get("symptoms") or diagnostic_request.get("question") or ""),
+        confirmed_solution=str(diagnostic_request.get("answer") or ""),
+        links=diagnostic_request.get("sources") or [],
+    )

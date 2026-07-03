@@ -11,6 +11,8 @@ from app.services.dialog_state_service import history_context_block
 from app.services.puls_data_service import (
     classify_feedback,
     create_solved_case,
+    create_solved_case_from_diagnostic,
+    get_latest_answered_diagnostic_request,
     get_active_conversation,
     save_diagnostic_event,
     save_feedback,
@@ -171,16 +173,28 @@ async def update_user_after_response(
                     feedback_text=normalized.text,
                 )
             if feedback_type == "helped":
-                create_solved_case(
+                latest_diagnostic = get_latest_answered_diagnostic_request(
+                    user_id=user.id,
+                    conversation_id=conversation_id,
+                    exclude_id=diagnostic_request_id,
+                )
+                created = create_solved_case_from_diagnostic(
                     user_id=user.id,
                     vehicle_id=vehicle_id,
-                    diagnostic_request_id=diagnostic_request_id,
+                    diagnostic_request=latest_diagnostic,
                     car_info=active_car or user.car_info or normalized.car_info,
-                    symptoms=symptom,
-                    confirmed_problem=symptom,
-                    confirmed_solution=answer,
-                    links=links or [],
                 )
+                if created is None:
+                    create_solved_case(
+                        user_id=user.id,
+                        vehicle_id=vehicle_id,
+                        diagnostic_request_id=diagnostic_request_id,
+                        car_info=active_car or user.car_info or normalized.car_info,
+                        symptoms=symptom,
+                        confirmed_problem=symptom,
+                        confirmed_solution=answer,
+                        links=links or [],
+                    )
     except (SupabaseUnavailableError, SupabaseOperationError):
         return None
 

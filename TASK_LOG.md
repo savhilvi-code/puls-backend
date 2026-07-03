@@ -13,3 +13,5 @@
 - Добавлен app/services/puls_data_service.py: backend теперь создает активные conversations, пишет messages, diagnostic_requests, parser_runs, video_library, user_feedback и solved_cases.
 - Исправлено списание лимита: kb_match больше не расходует Parser/Deep Search лимит.
 - Добавлен db/clean_test_data.sql для ручной очистки тестовой Supabase: удаляет пользователей, связанные user-owned данные и содержит проверочные запросы на пустую users и orphan-записи.
+- Добавлен app/services/decision_engine.py как единый PULS Decision Engine: `/chat` стал тонким router-слоем, а backend централизованно решает vehicle context, knowledge_cases/history lookup, Parser, Deep Search, quota и feedback flow.
+- Расширен app/services/puls_data_service.py: добавлены поиск автомобиля пользователя, поиск последнего диагностического запроса и создание solved_case из последнего успешного диагностического ответа.

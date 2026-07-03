@@ -4,6 +4,8 @@
 
 PULS backend - FastAPI-сервис для автомобильной диагностики. Он принимает запросы с сайта, маршрутизирует их через routers, вызывает services для диалога, поиска, парсера и базы знаний, а затем возвращает структурированный ответ клиенту.
 
+`app/services/decision_engine.py` является единым центром принятия решений для `/chat`: он определяет автомобиль и контекст, проверяет `knowledge_cases` и историю, решает запускать ли Parser или Deep Search, следит за quota-safe ответами и передает результат в persistence-слой.
+
 ## Структура папок
 
 ```text
@@ -27,6 +29,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
     - user.py
   - services/
     - __init__.py
+    - decision_engine.py
     - dialog_state_service.py
     - formatter_service.py
     - kb_service.py
@@ -55,6 +58,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 ## Services
 
 - `app/services/__init__.py`
+- `app/services/decision_engine.py`
 - `app/services/dialog_state_service.py`
 - `app/services/formatter_service.py`
 - `app/services/kb_service.py`
@@ -92,16 +96,19 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/main.py` -> `app/routers/history.py`
 - `app/main.py` -> `app/routers/search.py`
 - `app/routers/chat.py` -> `app/schemas/chat.py`
-- `app/routers/chat.py` -> `app/services/dialog_state_service.py`
-- `app/routers/chat.py` -> `app/services/formatter_service.py`
-- `app/routers/chat.py` -> `app/services/kb_service.py`
-- `app/routers/chat.py` -> `app/services/normalize_service.py`
-- `app/routers/chat.py` -> `app/services/parser_service.py`
-- `app/routers/chat.py` -> `app/services/router_service.py`
-- `app/routers/chat.py` -> `app/services/user_service.py`
+- `app/routers/chat.py` -> `app/services/decision_engine.py`
 - `app/routers/history.py` -> `app/services/request_journal_service.py`
 - `app/routers/search.py` -> `app/schemas/parser.py`
 - `app/routers/search.py` -> `app/services/parser_service.py`
+- `app/services/decision_engine.py` -> `app/schemas/chat.py`
+- `app/services/decision_engine.py` -> `app/services/dialog_state_service.py`
+- `app/services/decision_engine.py` -> `app/services/formatter_service.py`
+- `app/services/decision_engine.py` -> `app/services/kb_service.py`
+- `app/services/decision_engine.py` -> `app/services/normalize_service.py`
+- `app/services/decision_engine.py` -> `app/services/parser_service.py`
+- `app/services/decision_engine.py` -> `app/services/puls_data_service.py`
+- `app/services/decision_engine.py` -> `app/services/router_service.py`
+- `app/services/decision_engine.py` -> `app/services/user_service.py`
 - `app/services/dialog_state_service.py` -> `app/schemas/router.py`
 - `app/services/dialog_state_service.py` -> `app/schemas/user.py`
 - `app/services/kb_service.py` -> `app/database/supabase.py`
@@ -129,6 +136,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/database/supabase.py`: `knowledge_cases`, `users`
 - `app/services/kb_service.py`: `knowledge_cases`
 - `app/services/request_journal_service.py`: `diagnostic_requests`, `users`
+- `app/services/decision_engine.py`: central chat decision flow for vehicle context, knowledge lookup, Parser, Deep Search and quota-safe responses
 - `app/services/puls_data_service.py`: `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `video_library`, `user_feedback`, `solved_cases`
 - `db/puls_integration.sql`: `conversations`, `messages`, `parser_runs`, `user_feedback`, `solved_cases`, `video_library`, `vehicle_service_logs`
 - Telegram transport removed: backend is web/API-only.
@@ -139,7 +147,8 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 flowchart LR
     Frontend[Frontend] --> FastAPI[FastAPI]
     FastAPI --> Routers[Routers]
-    Routers --> Services[Services]
+    Routers --> Decision[Decision Engine]
+    Decision --> Services[Services]
     Services --> ParserKB[Parser / KB]
     ParserKB --> Supabase[Supabase]
     Supabase --> Response[Response]
