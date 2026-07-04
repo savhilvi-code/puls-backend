@@ -22,3 +22,8 @@
 - 2026-07-04: Added knowledge/history answer sanitizing so old saved cases with embedded JSON are cleaned before being returned from the internal knowledge base.
 - 2026-07-04: Strengthened knowledge answer sanitizing with JSON-like fallback extraction for old malformed cases that cannot be parsed as strict JSON.
 - 2026-07-04: Applied knowledge answer cleanup inside Decision Engine KB-match response path to prevent old malformed knowledge cases from reaching chat output.
+- 2026-07-05: Added backend `/api/vehicles` CRUD for user-owned vehicle cards and connected it to Supabase `vehicles`.
+- 2026-07-05: Hardened Decision Engine vehicle context so explicitly mentioned cars override the previous context, history passed to Parser is filtered by active vehicle, and Toyota/1G-GZE requests cannot match old Nissan/SR20VET knowledge.
+- 2026-07-05: Changed feedback persistence so `helped/not helped` messages are stored in `user_feedback` and do not become separate diagnostic request questions; Deep Search rows keep the original symptom.
+- 2026-07-05: Saved brand/model/year/engine snapshots into `solved_cases` so shared successful cases remain useful after a user deletes a personal vehicle card.
+- 2026-07-05: Cleaned history output by trimming malformed embedded JSON/citations and returning readable vehicle labels instead of raw `vehicle_id` values.

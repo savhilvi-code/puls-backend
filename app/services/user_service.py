@@ -139,13 +139,18 @@ async def update_user_after_response(
             user.requests_left = updated_user.requests_left
 
         diagnostic_request = None
-        if user.id is not None and message_type not in {"greeting", "limit"}:
+        feedback_type = classify_feedback(message_type, normalized.text)
+        is_feedback_only = message_type in {"feedback_helped", "feedback_not_helped"} and not parser_used and not deep_search_used
+        diagnostic_request_id = None
+
+        if user.id is not None and message_type not in {"greeting", "limit"} and not is_feedback_only:
+            diagnostic_question = (symptom or normalized.text or "").strip()
             diagnostic_request = save_diagnostic_event(
                 user_id=user.id,
                 conversation_id=conversation_id,
                 vehicle_id=vehicle_id,
                 vehicle_profile_id=vehicle_profile_id,
-                question=normalized.text,
+                question=diagnostic_question,
                 answer=answer,
                 language=normalized.language,
                 status=_status_for_message_type(message_type),
@@ -173,29 +178,29 @@ async def update_user_after_response(
                 links=links or [],
                 topic=symptom or normalized.text,
             )
-            feedback_type = classify_feedback(message_type, normalized.text)
-            if feedback_type:
-                save_feedback(
-                    user_id=user.id,
-                    vehicle_id=vehicle_id,
-                    conversation_id=conversation_id,
-                    diagnostic_request_id=diagnostic_request_id,
-                    feedback_type=feedback_type,
-                    feedback_text=normalized.text,
-                )
+        if user.id is not None and feedback_type:
+            latest_diagnostic = get_latest_answered_diagnostic_request(
+                user_id=user.id,
+                conversation_id=conversation_id,
+                exclude_id=diagnostic_request_id,
+            )
+            target_diagnostic_id = diagnostic_request_id or ((latest_diagnostic or {}).get("id"))
+            save_feedback(
+                user_id=user.id,
+                vehicle_id=vehicle_id or ((latest_diagnostic or {}).get("vehicle_id")),
+                conversation_id=conversation_id,
+                diagnostic_request_id=target_diagnostic_id,
+                feedback_type=feedback_type,
+                feedback_text=normalized.text,
+            )
             if feedback_type == "helped":
-                latest_diagnostic = get_latest_answered_diagnostic_request(
-                    user_id=user.id,
-                    conversation_id=conversation_id,
-                    exclude_id=diagnostic_request_id,
-                )
                 created = create_solved_case_from_diagnostic(
                     user_id=user.id,
                     vehicle_id=vehicle_id,
                     diagnostic_request=latest_diagnostic,
                     car_info=active_car or user.car_info or normalized.car_info,
                 )
-                if created is None:
+                if created is None and not is_feedback_only:
                     create_solved_case(
                         user_id=user.id,
                         vehicle_id=vehicle_id,

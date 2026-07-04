@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -65,15 +66,15 @@ def classify_feedback(message_type: str, text: str) -> str:
     message_type = str(message_type or "").lower()
     if message_type in {"feedback_not_helped", "followup_deep"}:
         return "not_helped"
-    if any(word in lowered for word in ("не помогло", "not helped", "did not help", "didn't help", "does not help", "no help")):
+    if any(word in lowered for word in ("не помогло", "не помог", "не помогла", "not helped", "did not help", "didn't help", "does not help", "no help")):
         return "not_helped"
-    if any(word in lowered for word in ("мало", "подробнее", "глубже", "more", "deeper", "details")):
+    if any(word in lowered for word in ("мало", "подробнее", "глубже", "больше", "more", "deeper", "details")):
         return "need_more"
-    if any(word in lowered for word in ("не та машина", "wrong car")):
+    if any(word in lowered for word in ("не та машина", "другая машина", "wrong car")):
         return "wrong_car"
     if any(word in lowered for word in ("неверно", "ошибка", "wrong answer")):
         return "wrong_answer"
-    if message_type == "feedback_helped" or any(word in lowered for word in ("помогло", "решено", "helped", "fixed", "solved")):
+    if message_type == "feedback_helped" or any(word in lowered for word in ("помогло", "помог", "решено", "helped", "fixed", "solved")):
         return "helped"
     return ""
 
@@ -134,6 +135,91 @@ def resolve_user_vehicle(*, user_id: int | None, car_text: str) -> dict | None:
         return None
 
     return _safe_execute(operation)
+
+
+def list_user_vehicles(*, user_id: int | None) -> list[dict]:
+    if user_id is None:
+        return []
+
+    def operation():
+        response = (
+            get_supabase_client()
+            .table("vehicles")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+        return _rows(response)
+
+    return _safe_execute(operation, [])
+
+
+def save_user_vehicle(*, user_id: int | None, vehicle_id: int | None, payload: dict[str, Any]) -> dict | None:
+    if user_id is None:
+        return None
+
+    clean_payload = {key: value for key, value in payload.items() if value is not None}
+    clean_payload["user_id"] = user_id
+    clean_payload["updated_at"] = _now_iso()
+
+    def operation():
+        client = get_supabase_client()
+        if vehicle_id:
+            response = (
+                client.table("vehicles")
+                .update(clean_payload)
+                .eq("id", vehicle_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        else:
+            response = client.table("vehicles").insert(clean_payload).execute()
+        rows = _rows(response)
+        return rows[0] if rows else None
+
+    return _safe_execute(operation)
+
+
+def delete_user_vehicle(*, user_id: int | None, vehicle_id: int | None) -> bool:
+    if user_id is None or vehicle_id is None:
+        return False
+
+    def operation():
+        get_supabase_client().table("vehicles").delete().eq("id", vehicle_id).eq("user_id", user_id).execute()
+        return True
+
+    return bool(_safe_execute(operation, False))
+
+
+def _vehicle_snapshot_from_text(car_info: str) -> dict[str, Any]:
+    text = " ".join(str(car_info or "").split())
+    words = text.split()
+    year_match = re.search(r"\b(19[8-9]\d|20[0-3]\d)\b", text)
+    engine_match = re.search(
+        r"\b(1g[- ]?gze|1ggze|sr20vet|qr20|qr25|2gr|1gr|ej20|ej25|k20|k24|m57|n52|n54|n55|b58)\b",
+        text,
+        re.IGNORECASE,
+    )
+    return {
+        "brand": words[0] if words else "",
+        "model": words[1] if len(words) > 1 else "",
+        "year": int(year_match.group(0)) if year_match else None,
+        "engine": engine_match.group(0) if engine_match else "",
+    }
+
+
+def _vehicle_snapshot_from_row(row: dict | None, car_info: str) -> dict[str, Any]:
+    fallback = _vehicle_snapshot_from_text(car_info)
+    if not row:
+        return fallback
+    return {
+        "brand": row.get("brand") or fallback["brand"],
+        "model": row.get("model") or fallback["model"],
+        "year": row.get("year") or fallback["year"],
+        "engine": row.get("engine") or fallback["engine"],
+    }
 
 
 def get_active_conversation(*, user_id: int | None, vehicle_id: int | None = None, title: str = "") -> dict | None:
@@ -353,11 +439,20 @@ def create_solved_case(
         client = get_supabase_client()
         if diagnostic_request_id:
             client.table("diagnostic_requests").update({"status": "resolved", "updated_at": _now_iso()}).eq("id", diagnostic_request_id).execute()
+        vehicle_row = None
+        if vehicle_id:
+            vehicle_response = client.table("vehicles").select("brand,model,year,engine").eq("id", vehicle_id).limit(1).execute()
+            vehicle_rows = _rows(vehicle_response)
+            vehicle_row = vehicle_rows[0] if vehicle_rows else None
+        snapshot = _vehicle_snapshot_from_row(vehicle_row, car_info)
         payload = {
             "user_id": user_id,
             "vehicle_id": vehicle_id,
             "diagnostic_request_id": diagnostic_request_id,
-            "brand": car_info,
+            "brand": snapshot.get("brand") or car_info,
+            "model": snapshot.get("model") or None,
+            "year": snapshot.get("year") or None,
+            "engine": snapshot.get("engine") or None,
             "symptoms": symptoms,
             "confirmed_problem": confirmed_problem,
             "confirmed_solution": confirmed_solution,

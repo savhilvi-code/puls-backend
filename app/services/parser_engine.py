@@ -371,7 +371,7 @@ def run_openai_search(client, data: DiagnosticRequest, user_message: str, domain
 
 
 def _combined_request_text(data: DiagnosticRequest) -> str:
-    return " ".join(
+    text = " ".join(
         part.strip()
         for part in (
             str(data.query or ""),
@@ -380,6 +380,9 @@ def _combined_request_text(data: DiagnosticRequest) -> str:
         )
         if str(part or "").strip()
     ).lower()
+    text = re.sub(r"\b1g\s+gze\b", "1g-gze", text)
+    text = re.sub(r"\bgs\s*131\b", "gs131", text)
+    return text
 
 
 def _is_legacy_airflow_meter_request(data: DiagnosticRequest) -> bool:

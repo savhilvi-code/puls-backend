@@ -5,6 +5,7 @@ from app.services.dialog_state_service import build_dialog_state
 from app.services.formatter_service import format_from_kb, format_technical_answer
 from app.services.kb_service import (
     _clean_case_answer,
+    _vehicle_context_matches,
     find_latest_case_for_feedback,
     find_matching_case,
     find_matching_history_case,
@@ -102,7 +103,10 @@ def _contains_any_phrase(text: str, phrases: set[str]) -> bool:
 
 
 def _normalize_phrase(text: str) -> str:
-    return " ".join(str(text or "").lower().split())
+    normalized = " ".join(str(text or "").lower().split())
+    normalized = re.sub(r"\b1g\s+gze\b", "1g-gze", normalized)
+    normalized = re.sub(r"\bgs\s*131\b", "gs131", normalized)
+    return normalized
 
 
 def _extract_active_car_from_text(text: str) -> str:
@@ -139,7 +143,7 @@ def _extract_active_car_from_text(text: str) -> str:
     engine_match = re.search(
         r"\b(\d[.,]\d\s?(?:л|литр|liter|l)|v6|v8|v10|v12|i4|i6|tdi|tsi|tfsi|dci|hdi|cdi|"
         r"m57|n52|n54|n55|b58|m54|2gr|1gr|1zz|2zz|qr20|qr25|sr20|sr20vet|vq35|vk56|om642|"
-        r"k20|k24|j35|ej20|ej25|fa20|fb25|1g-gze|1ggze|gs131)\b",
+        r"k20|k24|j35|ej20|ej25|fa20|fb25|1g[- ]?gze|1ggze|gs131)\b",
         normalized,
         re.IGNORECASE,
     )
@@ -188,12 +192,14 @@ def _build_parser_history_context(history: str, *, symptom: str, active_car: str
 
     for block in reversed(blocks):
         haystack = _normalize_phrase(block)
+        if active_car and not _vehicle_context_matches(haystack, active_car):
+            continue
         if any(needle and needle in haystack for needle in needles):
             selected.append(block)
         if len(selected) >= max_blocks:
             break
 
-    if not selected:
+    if not selected and not active_car:
         selected = blocks[-max_blocks:]
 
     selected.reverse()

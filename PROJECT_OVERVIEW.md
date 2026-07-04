@@ -30,6 +30,8 @@ PULS - это AI-система для автомобильной диагнос
 - GitHub Pages публикует frontend.
 - Render запускает backend FastAPI.
 - Backend Supabase writes require `SUPABASE_SERVICE_ROLE_KEY` on Render. A publishable/anon Supabase key can pass read checks but cannot create users, conversations, messages, quota updates or parser_runs when RLS is enabled.
+- User vehicle cards are managed by backend `/api/vehicles` and stored in Supabase `vehicles`. Frontend may cache them locally, but Supabase is the source of truth after login.
+- Shared diagnostic knowledge is separated from personal vehicle ownership: deleting a vehicle removes the user's vehicle card and service logs, while confirmed solved cases keep brand/model/year/engine snapshots for reuse by other users with matching cars.
 
 ```mermaid
 flowchart LR
@@ -100,6 +102,13 @@ flowchart LR
 - knowledge base - сохранение и поиск полезных диагностических кейсов.
 
 ---
+
+### Vehicle Ownership And Shared Knowledge
+
+- `/api/vehicles` is the backend API for personal cars in "My car".
+- `vehicles.id` is used as the stable vehicle id for conversations, messages, parser runs, video library entries and diagnostic requests when the car belongs to the user.
+- If a user asks about another car that is not saved in "My car", Decision Engine keeps that car as dialog context without creating a vehicle card automatically.
+- `solved_cases` and later `knowledge_cases` are shared diagnostic knowledge. They keep vehicle snapshot data so successful solutions remain available even after a user deletes a personal vehicle card.
 
 ## 5. Frontend Architecture
 

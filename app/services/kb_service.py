@@ -44,6 +44,66 @@ def _contains_any(haystack: str, needle: str) -> bool:
     return bool(need) and need in hay
 
 
+_KNOWN_BRANDS = (
+    "toyota",
+    "nissan",
+    "honda",
+    "mazda",
+    "subaru",
+    "mitsubishi",
+    "suzuki",
+    "lexus",
+    "infiniti",
+    "bmw",
+    "mercedes",
+    "audi",
+    "volkswagen",
+    "peugeot",
+    "renault",
+    "ford",
+    "chevrolet",
+    "hyundai",
+    "kia",
+)
+
+
+def _vehicle_tokens(value: str) -> set[str]:
+    text = _normalize_text(value)
+    tokens = set(_tokenize(text))
+    for brand in _KNOWN_BRANDS:
+        if brand in text:
+            tokens.add(brand)
+    for match in re.findall(r"\b(19[8-9]\d|20[0-3]\d|[a-z0-9]{1,4}[- ]?[a-z]{2,4}|gs\d{3}|sr20vet|1g[- ]?gze)\b", text):
+        tokens.add(match.replace(" ", "-"))
+        tokens.add(match.replace("-", ""))
+    return {token for token in tokens if len(token) > 2}
+
+
+def _vehicle_context_matches(haystack: str, active_car: str) -> bool:
+    active = _normalize_text(active_car)
+    if not active:
+        return True
+
+    hay = _normalize_text(haystack)
+    active_brands = {brand for brand in _KNOWN_BRANDS if brand in active}
+    hay_brands = {brand for brand in _KNOWN_BRANDS if brand in hay}
+    if active_brands:
+        if not any(brand in hay for brand in active_brands):
+            return False
+        if hay_brands and not active_brands.intersection(hay_brands):
+            return False
+
+    critical_tokens = {
+        token
+        for token in _vehicle_tokens(active)
+        if token in active_brands or re.search(r"\d", token) or len(token) >= 5
+    }
+    if critical_tokens:
+        matched = sum(1 for token in critical_tokens if token in hay or token.replace("-", "") in hay.replace("-", ""))
+        return matched >= min(2, len(critical_tokens))
+    return True
+
+
 def _normalize_link_item(item: dict) -> dict:
     return {
         "title": str(item.get("title") or item.get("forum") or item.get("name") or item.get("source") or ""),
@@ -249,6 +309,8 @@ def _score_case(row: dict, *, active_car: str, symptom: str, language: str, prev
             str(row.get("country") or ""),
         ]
     ).lower()
+    if not _vehicle_context_matches(haystack, active_car):
+        return 0
     score = 0
     if symptom and _normalize_text(symptom) in _normalize_text(haystack):
         score += 6
@@ -383,6 +445,8 @@ async def find_matching_history_case(*, history: str, active_car: str, symptom: 
             ]
         )
         haystack = _normalize_text(text_parts)
+        if not _vehicle_context_matches(haystack, active_car):
+            continue
         score = 0
 
         if symptom_norm and symptom_norm in haystack:

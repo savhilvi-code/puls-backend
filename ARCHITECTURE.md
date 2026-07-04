@@ -21,6 +21,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
     - health.py
     - history.py
     - search.py
+    - vehicles.py
   - schemas/
     - __init__.py
     - chat.py
@@ -54,6 +55,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/routers/health.py`
 - `app/routers/history.py`
 - `app/routers/search.py`
+- `app/routers/vehicles.py`
 
 ## Services
 
@@ -95,11 +97,14 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/main.py` -> `app/routers/health.py`
 - `app/main.py` -> `app/routers/history.py`
 - `app/main.py` -> `app/routers/search.py`
+- `app/main.py` -> `app/routers/vehicles.py`
 - `app/routers/chat.py` -> `app/schemas/chat.py`
 - `app/routers/chat.py` -> `app/services/decision_engine.py`
 - `app/routers/history.py` -> `app/services/request_journal_service.py`
 - `app/routers/search.py` -> `app/schemas/parser.py`
 - `app/routers/search.py` -> `app/services/parser_service.py`
+- `app/routers/vehicles.py` -> `app/database/supabase.py`
+- `app/routers/vehicles.py` -> `app/services/puls_data_service.py`
 - `app/services/decision_engine.py` -> `app/schemas/chat.py`
 - `app/services/decision_engine.py` -> `app/services/dialog_state_service.py`
 - `app/services/decision_engine.py` -> `app/services/formatter_service.py`
@@ -138,7 +143,8 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/services/kb_service.py`: `knowledge_cases`
 - `app/services/request_journal_service.py`: `diagnostic_requests`, `users`
 - `app/services/decision_engine.py`: central chat decision flow for vehicle context, knowledge lookup, Parser, Deep Search and quota-safe responses
-- `app/services/puls_data_service.py`: `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `video_library`, `user_feedback`, `solved_cases`
+- `app/services/puls_data_service.py`: `vehicles`, `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `video_library`, `user_feedback`, `solved_cases`
+- `app/routers/vehicles.py`: `/api/vehicles` CRUD for user-owned vehicle cards. Deleting a user vehicle removes the personal card and vehicle service logs, while solved diagnostic cases keep a brand/model/year/engine snapshot for the shared knowledge base.
 - `db/puls_integration.sql`: `conversations`, `messages`, `parser_runs`, `user_feedback`, `solved_cases`, `video_library`, `vehicle_service_logs`
 - Telegram transport removed: backend is web/API-only.
 
@@ -161,3 +167,12 @@ flowchart LR
     ParserKB --> Supabase[Supabase]
     Supabase --> Response[Response]
 ```
+
+## Vehicle Context Rules
+
+- User-owned cars live in `vehicles` and are exposed through `/api/vehicles`.
+- `/chat` receives the active frontend car as `car_info`; Decision Engine first tries to resolve it to the user's `vehicles.id`.
+- If the user explicitly mentions another car, the mentioned car overrides the previous active context. If it is not in `vehicles`, it remains a dialog context without creating a personal vehicle row.
+- Knowledge lookup is vehicle-aware: a case for Nissan/SR20VET must not satisfy a Toyota/1G-GZE request.
+- Parser history context is filtered by the active vehicle before it is passed to Parser/Deep Search, preventing old-car contamination.
+- `solved_cases` keeps vehicle snapshot fields, so successful cases remain useful after a user deletes a personal vehicle card.

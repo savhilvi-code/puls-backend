@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 
@@ -12,6 +13,17 @@ def _dedupe(items: list[str]) -> list[str]:
             seen.add(value)
             out.append(value)
     return out
+
+
+def _clean_text(value: str, *, max_len: int = 1400) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"</?cite\b[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    if len(text) > max_len:
+        text = text[:max_len].rstrip() + "..."
+    return text
 
 
 def _split_links(links: Iterable[dict]) -> tuple[list[dict], list[dict]]:
@@ -61,9 +73,12 @@ def format_technical_answer(*, language: str, diagnosis: str, probable_causes: l
     })
 
     forum_links, youtube_links = _split_links(links)
-    parts = [
-        f"{labels['diagnosis']}: {diagnosis}".strip(),
-    ]
+    diagnosis = _clean_text(diagnosis, max_len=900)
+    probable_causes = [_clean_text(item, max_len=260) for item in probable_causes]
+    first_checks = [_clean_text(item, max_len=520) for item in first_checks]
+    less_likely = [_clean_text(item, max_len=240) for item in less_likely]
+
+    parts = [f"{labels['diagnosis']}: {diagnosis}".strip()]
     if probable_causes:
         parts.append(f"{labels['causes']}:\n- " + "\n- ".join(_dedupe(probable_causes)))
     if first_checks:
@@ -90,7 +105,7 @@ def format_from_kb(*, language: str, answer: str, links: list[dict], question_ta
         if language == "ru"
         else "Did this solve the problem? If not, write 'not helped' and I will run a deeper search."
     )
-    answer = str(answer or "").strip()
+    answer = _clean_text(answer, max_len=2200)
     forum_links, youtube_links = _split_links(links)
     parts = [answer] if answer else []
     if forum_links:
@@ -99,4 +114,3 @@ def format_from_kb(*, language: str, answer: str, links: list[dict], question_ta
         parts.append("YouTube:\n" + "\n".join(f"- {item['title']}: {item['url']}" for item in youtube_links))
     parts.append(followup)
     return "\n\n".join(parts)
-
