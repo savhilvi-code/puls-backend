@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.database.supabase import (
     get_supabase_client,
     is_supabase_configured,
+    is_supabase_service_role_env_present,
     is_supabase_service_key_configured,
     supabase_env_names,
     supabase_key_source,
@@ -27,6 +28,7 @@ async def health() -> dict:
         "supabase": {
             "configured": is_supabase_configured(),
             "read_ok": supabase_read_ok,
+            "service_role_present": is_supabase_service_role_env_present(),
             "service_key": is_supabase_service_key_configured(),
             "key_source": supabase_key_source(),
             "env_names": supabase_env_names(),

@@ -59,6 +59,10 @@ def supabase_env_names() -> list[str]:
     return sorted(name for name in os.environ if name.startswith("SUPABASE"))
 
 
+def is_supabase_service_role_env_present() -> bool:
+    return bool(_env_value("SUPABASE_SERVICE_ROLE_KEY"))
+
+
 def is_supabase_service_key_configured() -> bool:
     key = _supabase_key()
     if not key:
