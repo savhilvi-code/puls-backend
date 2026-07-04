@@ -1,5 +1,8 @@
 -- Clean all current test users and their related PULS data.
 -- Run manually in Supabase SQL Editor for the test project only.
+-- Do not run this through the frontend publishable/anon key: RLS can return
+-- successful REST statuses while leaving protected rows untouched.
+-- Use Supabase SQL Editor, psql with owner privileges, or a service-role key.
 --
 -- This script intentionally leaves shared reference/knowledge tables intact:
 -- vehicle_profiles, knowledge_cases, knowledge_events, dtc_errors.
