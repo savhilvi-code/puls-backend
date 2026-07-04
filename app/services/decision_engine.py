@@ -4,6 +4,7 @@ from app.schemas.chat import ChatResponse
 from app.services.dialog_state_service import build_dialog_state
 from app.services.formatter_service import format_from_kb, format_technical_answer
 from app.services.kb_service import (
+    _clean_case_answer,
     find_latest_case_for_feedback,
     find_matching_case,
     find_matching_history_case,
@@ -525,6 +526,9 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             )
 
         if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
+            matched_case_answer, embedded_links = _clean_case_answer(matched_case_answer)
+            if embedded_links and not matched_case_links:
+                matched_case_links = embedded_links
             answer_text = format_from_kb(
                 language=state.language,
                 answer=matched_case_answer,
