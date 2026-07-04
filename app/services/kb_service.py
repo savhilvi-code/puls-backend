@@ -9,6 +9,7 @@ from app.database.supabase import (
     get_supabase_client,
 )
 from app.services.formatter_service import format_from_kb
+from app.services.parser_engine import extract_json
 
 
 def _normalize_text(value: str) -> str:
@@ -101,6 +102,49 @@ def _row_links(row: dict) -> list[dict]:
             if normalized:
                 return normalized
     return []
+
+
+def _extract_embedded_case(text: str) -> dict:
+    value = str(text or "").strip()
+    if "{" not in value or "}" not in value:
+        return {}
+    parsed = extract_json(value)
+    if not isinstance(parsed, dict):
+        return {}
+    if not any(parsed.get(field) for field in ("summary", "recommendation", "common_causes", "solutions", "links", "topics_found")):
+        return {}
+    return parsed
+
+
+def _answer_from_structured_payload(payload: dict) -> str:
+    summary = str(payload.get("summary") or payload.get("recommendation") or "").strip()
+    causes = payload.get("common_causes") if isinstance(payload.get("common_causes"), list) else []
+    solutions = payload.get("solutions") if isinstance(payload.get("solutions"), list) else []
+
+    parts = [summary] if summary else []
+    for item in causes[:2]:
+        if isinstance(item, dict) and str(item.get("cause") or "").strip():
+            parts.append(str(item.get("cause") or "").strip())
+    for item in solutions[:2]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        step = "\n".join(part for part in (title, description) if part)
+        if step:
+            parts.append(step)
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _clean_case_answer(answer: str) -> tuple[str, list[dict]]:
+    embedded = _extract_embedded_case(answer)
+    if not embedded:
+        return str(answer or "").strip(), []
+    cleaned = _answer_from_structured_payload(embedded)
+    links = _normalize_links(embedded.get("links") or [])
+    if not links:
+        links = _normalize_links(embedded.get("topics_found") or [])
+    return cleaned or str(answer or "").strip(), links
 
 
 def _is_placeholder_case(row: dict) -> bool:
@@ -216,9 +260,12 @@ async def find_matching_case(state, decision):
         return None
 
     answer = str(row.get("full_answer") or row.get("recommended_action") or row.get("confirmed_cause") or "").strip()
+    answer, embedded_links = _clean_case_answer(answer)
     if not answer:
         return None
     links = _row_links(row)
+    if embedded_links:
+        links = links or embedded_links
     formatted = format_from_kb(
         language=state.language,
         answer=answer,
@@ -303,11 +350,13 @@ async def find_matching_history_case(*, history: str, active_car: str, symptom: 
         if score > best_score and (fields.get("assistant") or block["links"]):
             best_score = score
             answer = fields.get("assistant") or ""
+            answer, embedded_links = _clean_case_answer(answer)
+            links = block["links"] or embedded_links
             best = {
                 "id": fields.get("id"),
                 "answer": answer,
-                "links": block["links"],
-                "formatted_answer": format_from_kb(language=language, answer=answer, links=block["links"]),
+                "links": links,
+                "formatted_answer": format_from_kb(language=language, answer=answer, links=links),
                 "row": fields,
                 "source_type": "history",
             }
