@@ -1,3 +1,4 @@
+import re
 from difflib import SequenceMatcher
 
 from fastapi import HTTPException
@@ -136,10 +137,61 @@ def _answer_from_structured_payload(payload: dict) -> str:
     return "\n\n".join(part for part in parts if part).strip()
 
 
+def _jsonish_values(text: str, key: str, limit: int = 4) -> list[str]:
+    values = []
+    pattern = rf'"{re.escape(key)}"\s*:\s*"((?:[^"\\]|\\.)*)"'
+    for match in re.finditer(pattern, str(text or ""), flags=re.IGNORECASE):
+        value = match.group(1).replace('\\"', '"').replace("\\n", "\n").strip()
+        if value and value not in values:
+            values.append(value)
+        if len(values) >= limit:
+            break
+    return values
+
+
+def _clean_jsonish_answer(answer: str) -> tuple[str, list[dict]]:
+    text = str(answer or "").strip()
+    if '"summary"' not in text and '"common_causes"' not in text and '"solutions"' not in text:
+        return text, []
+
+    parts: list[str] = []
+    summary = _jsonish_values(text, "summary", limit=1)
+    recommendation = _jsonish_values(text, "recommendation", limit=1)
+    causes = _jsonish_values(text, "cause", limit=2)
+    titles = _jsonish_values(text, "title", limit=6)
+    descriptions = _jsonish_values(text, "description", limit=6)
+
+    parts.extend(summary or recommendation)
+    parts.extend(causes)
+    for title, description in zip(titles[:3], descriptions[:3]):
+        if title.startswith("http"):
+            continue
+        parts.append("\n".join(part for part in (title, description) if part).strip())
+
+    urls = _jsonish_values(text, "url", limit=10)
+    links = []
+    for index, url in enumerate(urls):
+        if not url.startswith("http"):
+            continue
+        links.append(
+            {
+                "title": titles[index] if index < len(titles) else url,
+                "url": url,
+                "description": descriptions[index] if index < len(descriptions) else "",
+                "type": "link",
+            }
+        )
+
+    cleaned = "\n\n".join(part for part in parts if part).strip()
+    if cleaned:
+        return cleaned, links
+    return text, links
+
+
 def _clean_case_answer(answer: str) -> tuple[str, list[dict]]:
     embedded = _extract_embedded_case(answer)
     if not embedded:
-        return str(answer or "").strip(), []
+        return _clean_jsonish_answer(answer)
     cleaned = _answer_from_structured_payload(embedded)
     links = _normalize_links(embedded.get("links") or [])
     if not links:

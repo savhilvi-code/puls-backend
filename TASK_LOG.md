@@ -20,3 +20,4 @@
 - 2026-07-04: Added `/health.supabase.service_role_present` to explicitly confirm whether Render exposes `SUPABASE_SERVICE_ROLE_KEY` to the running backend.
 - 2026-07-04: Fixed feedback classification so `not helped` is stored as `not_helped`, and normalized embedded JSON from Parser/Deep Search before formatting answers.
 - 2026-07-04: Added knowledge/history answer sanitizing so old saved cases with embedded JSON are cleaned before being returned from the internal knowledge base.
+- 2026-07-04: Strengthened knowledge answer sanitizing with JSON-like fallback extraction for old malformed cases that cannot be parsed as strict JSON.
