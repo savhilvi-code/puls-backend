@@ -1,3 +1,5 @@
+import logging
+
 from app.database.supabase import (
     SupabaseOperationError,
     SupabaseUnavailableError,
@@ -23,6 +25,7 @@ from app.services.puls_data_service import (
 from app.schemas.user import UserRecord
 
 DEFAULT_REQUESTS_LEFT = 10
+logger = logging.getLogger(__name__)
 
 
 def _build_transient_user(normalized) -> UserRecord:
@@ -45,7 +48,11 @@ async def get_or_create_user(normalized) -> UserRecord:
             auth_user_id=normalized.auth_user_id,
             email=normalized.email,
         )
-    except (SupabaseUnavailableError, SupabaseOperationError):
+    except SupabaseUnavailableError as exc:
+        logger.warning("Using transient user because Supabase is unavailable: %s", exc)
+        return _build_transient_user(normalized)
+    except SupabaseOperationError as exc:
+        logger.exception("Using transient user because Supabase lookup failed: %s", exc)
         return _build_transient_user(normalized)
 
     if existing is not None:
@@ -63,7 +70,11 @@ async def get_or_create_user(normalized) -> UserRecord:
 
     try:
         return create_user_record(payload)
-    except (SupabaseUnavailableError, SupabaseOperationError):
+    except SupabaseUnavailableError as exc:
+        logger.warning("Using transient user because Supabase is unavailable: %s", exc)
+        return _build_transient_user(normalized)
+    except SupabaseOperationError as exc:
+        logger.exception("Using transient user because Supabase user creation failed: %s", exc)
         return _build_transient_user(normalized)
 
 
@@ -195,7 +206,11 @@ async def update_user_after_response(
                         confirmed_solution=answer,
                         links=links or [],
                     )
-    except (SupabaseUnavailableError, SupabaseOperationError):
+    except SupabaseUnavailableError as exc:
+        logger.warning("Skipped persistence because Supabase is unavailable: %s", exc)
+        return None
+    except SupabaseOperationError as exc:
+        logger.exception("Skipped persistence because Supabase update failed: %s", exc)
         return None
 
 

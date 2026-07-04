@@ -1,4 +1,6 @@
 import os
+import base64
+import json
 from functools import lru_cache
 from typing import Any
 
@@ -18,15 +20,50 @@ def _env_value(name: str) -> str:
 
 
 def is_supabase_configured() -> bool:
-    return bool(_env_value("SUPABASE_URL") and _env_value("SUPABASE_KEY"))
+    return bool(_env_value("SUPABASE_URL") and _supabase_key())
+
+
+def _supabase_key() -> str:
+    return _env_value("SUPABASE_SERVICE_ROLE_KEY") or _env_value("SUPABASE_KEY")
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def supabase_key_source() -> str:
+    if _env_value("SUPABASE_SERVICE_ROLE_KEY"):
+        return "SUPABASE_SERVICE_ROLE_KEY"
+    if _env_value("SUPABASE_KEY"):
+        return "SUPABASE_KEY"
+    return ""
+
+
+def is_supabase_service_key_configured() -> bool:
+    key = _supabase_key()
+    if not key:
+        return False
+    if key.startswith("sb_secret_"):
+        return True
+    if key.startswith("sb_publishable_"):
+        return False
+    payload = _decode_jwt_payload(key)
+    return payload.get("role") == "service_role"
 
 
 @lru_cache(maxsize=1)
 def get_supabase_client() -> Client:
     url = _env_value("SUPABASE_URL")
-    key = _env_value("SUPABASE_KEY")
+    key = _supabase_key()
     if not url or not key:
-        raise SupabaseUnavailableError("Supabase is not configured. Set SUPABASE_URL and SUPABASE_KEY.")
+        raise SupabaseUnavailableError("Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
     if url.endswith("/rest/v1") or url.endswith("/rest/v1/"):
         url = url[: url.index("/rest/v1")]
     try:

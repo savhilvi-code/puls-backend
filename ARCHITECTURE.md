@@ -134,12 +134,20 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 ## Таблицы Supabase
 
 - `app/database/supabase.py`: `knowledge_cases`, `users`
+- `app/database/supabase.py`: Supabase client now prefers `SUPABASE_SERVICE_ROLE_KEY` over `SUPABASE_KEY` so backend writes can bypass RLS safely.
 - `app/services/kb_service.py`: `knowledge_cases`
 - `app/services/request_journal_service.py`: `diagnostic_requests`, `users`
 - `app/services/decision_engine.py`: central chat decision flow for vehicle context, knowledge lookup, Parser, Deep Search and quota-safe responses
 - `app/services/puls_data_service.py`: `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `video_library`, `user_feedback`, `solved_cases`
 - `db/puls_integration.sql`: `conversations`, `messages`, `parser_runs`, `user_feedback`, `solved_cases`, `video_library`, `vehicle_service_logs`
 - Telegram transport removed: backend is web/API-only.
+
+## Supabase Runtime Requirements
+
+- Backend must use `SUPABASE_SERVICE_ROLE_KEY` in Render for write operations.
+- `SUPABASE_KEY` may remain for compatibility, but publishable/anon keys cannot insert rows when RLS is enabled.
+- `/health` returns Supabase diagnostics: configured, read_ok, service_key, key_source, and a short read error if available.
+- Persistence failures are logged by `user_service` and `puls_data_service` instead of being silently hidden.
 
 ## Поток запроса
 

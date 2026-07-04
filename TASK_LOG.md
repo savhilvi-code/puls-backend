@@ -15,3 +15,4 @@
 - Добавлен db/clean_test_data.sql для ручной очистки тестовой Supabase: удаляет пользователей, связанные user-owned данные и содержит проверочные запросы на пустую users и orphan-записи.
 - Добавлен app/services/decision_engine.py как единый PULS Decision Engine: `/chat` стал тонким router-слоем, а backend централизованно решает vehicle context, knowledge_cases/history lookup, Parser, Deep Search, quota и feedback flow.
 - Расширен app/services/puls_data_service.py: добавлены поиск автомобиля пользователя, поиск последнего диагностического запроса и создание solved_case из последнего успешного диагностического ответа.
+- 2026-07-04: Diagnosed empty Supabase writes. The current backend key is publishable/anon and fails inserts under RLS. Backend now prefers `SUPABASE_SERVICE_ROLE_KEY`, `/health` exposes Supabase diagnostics, and persistence/parser failures are logged for Render troubleshooting.

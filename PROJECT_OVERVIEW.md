@@ -29,6 +29,7 @@ PULS - это AI-система для автомобильной диагнос
 - Claude используется для глубокого поиска и анализа через cloud/search-ветку.
 - GitHub Pages публикует frontend.
 - Render запускает backend FastAPI.
+- Backend Supabase writes require `SUPABASE_SERVICE_ROLE_KEY` on Render. A publishable/anon Supabase key can pass read checks but cannot create users, conversations, messages, quota updates or parser_runs when RLS is enabled.
 
 ```mermaid
 flowchart LR
@@ -136,6 +137,7 @@ flowchart LR
 Backend:
 
 - `ARCHITECTURE.md` - карта backend: структура `app`, routers, services, schemas, database, зависимости, Supabase tables и поток запроса.
+- Backend `/health` reports Supabase diagnostics so Render environment issues are visible before testing chat persistence.
 - `CODEX_RULES.md` - правила работы Codex с backend-проектом.
 - `TASK_LOG.md` - журнал выполненных backend-задач и изменений документации.
 

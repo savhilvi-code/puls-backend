@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 
@@ -18,6 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from app.schemas.parser import DiagnosticRequest
 
+logger = logging.getLogger(__name__)
 
 FORUMS = {
     "ru": [
@@ -597,7 +599,8 @@ async def diagnose(data: DiagnosticRequest) -> dict:
                     mode=mode,
                     source="remote parser api",
                 )
-        except Exception:
+        except Exception as exc:
+            logger.exception("Remote parser call failed for %s: %s", remote_url, exc)
             pass
 
     legacy_result = _legacy_1g_gze_airflow_result(data)

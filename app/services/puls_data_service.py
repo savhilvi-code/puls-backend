@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError, get_supabase_client, is_supabase_configured
 
 VIDEO_DOMAINS = ("youtube.com", "youtu.be", "rutube.ru", "vimeo.com")
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -18,12 +20,15 @@ def _rows(response) -> list[dict]:
 
 def _safe_execute(operation, default=None):
     if not is_supabase_configured():
+        logger.warning("Supabase operation skipped because Supabase is not configured.")
         return default
     try:
         return operation()
-    except (SupabaseUnavailableError, SupabaseOperationError):
+    except (SupabaseUnavailableError, SupabaseOperationError) as exc:
+        logger.exception("Supabase operation failed: %s", exc)
         return default
-    except Exception:
+    except Exception as exc:
+        logger.exception("Unexpected Supabase operation failure: %s", exc)
         return default
 
 
