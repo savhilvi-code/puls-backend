@@ -63,9 +63,9 @@ def extract_videos(links: list[dict] | None) -> list[dict]:
 def classify_feedback(message_type: str, text: str) -> str:
     lowered = " ".join(str(text or "").lower().split())
     message_type = str(message_type or "").lower()
-    if message_type == "feedback_helped" or any(word in lowered for word in ("помогло", "решено", "helped", "fixed", "solved")):
-        return "helped"
     if message_type in {"feedback_not_helped", "followup_deep"}:
+        return "not_helped"
+    if any(word in lowered for word in ("не помогло", "not helped", "did not help", "didn't help", "does not help", "no help")):
         return "not_helped"
     if any(word in lowered for word in ("мало", "подробнее", "глубже", "more", "deeper", "details")):
         return "need_more"
@@ -73,6 +73,8 @@ def classify_feedback(message_type: str, text: str) -> str:
         return "wrong_car"
     if any(word in lowered for word in ("неверно", "ошибка", "wrong answer")):
         return "wrong_answer"
+    if message_type == "feedback_helped" or any(word in lowered for word in ("помогло", "решено", "helped", "fixed", "solved")):
+        return "helped"
     return ""
 
 

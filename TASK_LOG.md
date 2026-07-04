@@ -18,3 +18,4 @@
 - 2026-07-04: Diagnosed empty Supabase writes. The current backend key is publishable/anon and fails inserts under RLS. Backend now prefers `SUPABASE_SERVICE_ROLE_KEY`, `/health` exposes Supabase diagnostics, and persistence/parser failures are logged for Render troubleshooting.
 - 2026-07-04: Extended Supabase secret-key detection to support `SUPABASE_SECRET_KEY` and `SUPABASE_SERVICE_KEY`; `/health` now reports Supabase env variable names without exposing values.
 - 2026-07-04: Added `/health.supabase.service_role_present` to explicitly confirm whether Render exposes `SUPABASE_SERVICE_ROLE_KEY` to the running backend.
+- 2026-07-04: Fixed feedback classification so `not helped` is stored as `not_helped`, and normalized embedded JSON from Parser/Deep Search before formatting answers.

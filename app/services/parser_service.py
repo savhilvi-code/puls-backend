@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.parser import DiagnosticRequest
-from app.services.parser_engine import diagnose
+from app.services.parser_engine import diagnose, extract_json
 
 
 class ParserUnavailableError(RuntimeError):
@@ -129,6 +129,43 @@ def _has_usable_payload(data: dict) -> bool:
     return False
 
 
+def _merge_embedded_json_payload(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return data
+
+    for key in ("parser_summary", "summary", "recommendation"):
+        text = str(data.get(key) or "").strip()
+        if "{" not in text or "}" not in text:
+            continue
+        parsed = extract_json(text)
+        if not isinstance(parsed, dict):
+            continue
+        if not any(parsed.get(field) for field in ("summary", "recommendation", "common_causes", "solutions", "links", "topics_found")):
+            continue
+
+        merged = dict(data)
+        for field in (
+            "summary",
+            "recommendation",
+            "common_causes",
+            "solutions",
+            "unlikely_causes",
+            "regional_insights",
+            "links",
+            "topics_found",
+            "total_topics",
+            "confidence",
+            "need_more_info",
+            "clarifying_question",
+        ):
+            if parsed.get(field):
+                merged[field] = parsed[field]
+        merged["_embedded_json_extracted"] = True
+        return merged
+
+    return data
+
+
 async def parse_diagnostic(router_json: dict) -> dict:
     deep_search = bool(router_json.get("deep_search", False))
     query = str(
@@ -146,7 +183,7 @@ async def parse_diagnostic(router_json: dict) -> dict:
         mode="deep" if deep_search else "normal",
     )
 
-    data = await diagnose(payload)
+    data = _merge_embedded_json_payload(await diagnose(payload))
     if not _has_usable_payload(data):
         raise ParserUnavailableError(
             str(data.get("error") or data.get("summary") or "Parser returned no usable data.")
