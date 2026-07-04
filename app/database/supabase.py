@@ -24,7 +24,12 @@ def is_supabase_configured() -> bool:
 
 
 def _supabase_key() -> str:
-    return _env_value("SUPABASE_SERVICE_ROLE_KEY") or _env_value("SUPABASE_KEY")
+    return (
+        _env_value("SUPABASE_SERVICE_ROLE_KEY")
+        or _env_value("SUPABASE_SECRET_KEY")
+        or _env_value("SUPABASE_SERVICE_KEY")
+        or _env_value("SUPABASE_KEY")
+    )
 
 
 def _decode_jwt_payload(token: str) -> dict[str, Any]:
@@ -41,9 +46,17 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
 def supabase_key_source() -> str:
     if _env_value("SUPABASE_SERVICE_ROLE_KEY"):
         return "SUPABASE_SERVICE_ROLE_KEY"
+    if _env_value("SUPABASE_SECRET_KEY"):
+        return "SUPABASE_SECRET_KEY"
+    if _env_value("SUPABASE_SERVICE_KEY"):
+        return "SUPABASE_SERVICE_KEY"
     if _env_value("SUPABASE_KEY"):
         return "SUPABASE_KEY"
     return ""
+
+
+def supabase_env_names() -> list[str]:
+    return sorted(name for name in os.environ if name.startswith("SUPABASE"))
 
 
 def is_supabase_service_key_configured() -> bool:
