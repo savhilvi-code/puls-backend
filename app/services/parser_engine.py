@@ -431,6 +431,19 @@ def _build_search_hints(data: DiagnosticRequest) -> list[str]:
                 "If sources confirm it, name the part as VAF/AFM (лопаточный расходомер).",
             ]
         )
+    text = _combined_request_text(data)
+    turbo_markers = ("\u0442\u0443\u0440\u0431\u0438\u043d", "turbo", "boost", "wastegate", "\u0432\u0435\u0441\u0442\u0433\u0435\u0439\u0442")
+    setup_markers = ("\u043d\u0430\u0441\u0442\u0440\u043e", "\u0440\u0435\u0433\u0443\u043b\u0438\u0440\u043e\u0432", "tune", "adjust", "setup", "set up")
+    if any(term in text for term in turbo_markers) and any(term in text for term in setup_markers):
+        hints.extend(
+            [
+                "Treat this as a turbo setup / boost control / wastegate adjustment request, not as a generic warm-engine power-loss diagnosis.",
+                "Reject unrelated topics about coolant temperature sensor, ignition misfire, transmission noise, suspension, or general loss of power unless they explicitly discuss turbo boost control on the requested engine.",
+                "Prefer search variants such as: SR20VET turbo setup, SR20VET boost adjustment, SR20VET wastegate adjustment, SR20VET actuator preload, SR20VET boost controller setup, X-Trail GT SR20VET turbo tuning.",
+                "Return only links and conclusions that explicitly discuss turbo setup, boost adjustment, wastegate, actuator preload, or boost controller behavior.",
+                "In the final summary, answer the requested operation directly: what to check first, what is adjusted mechanically/electronically, and what mistakes are dangerous.",
+            ]
+        )
     return hints
 
 
@@ -450,29 +463,58 @@ def _result_text_blob(result: dict) -> str:
 def _result_matches_request(result: dict, data: DiagnosticRequest) -> bool:
     if not isinstance(result, dict) or result.get("error"):
         return False
-    if not _is_legacy_airflow_meter_request(data):
-        return True
-
     blob = _result_text_blob(result)
-    airflow_terms = (
-        "расходомер",
-        "vaf",
-        "afm",
-        "flap",
-        "лопат",
-        "air flow meter",
-        "vane air",
-    )
-    unrelated_terms = (
-        "турбин",
-        "turbo",
-        "boost",
-        "датчик детонации",
-        "knock sensor",
-    )
-    has_airflow = any(term in blob for term in airflow_terms)
-    has_unrelated_only = any(term in blob for term in unrelated_terms) and not has_airflow
-    return has_airflow and not has_unrelated_only
+    if _is_legacy_airflow_meter_request(data):
+        airflow_terms = (
+            "расходомер",
+            "vaf",
+            "afm",
+            "flap",
+            "лопат",
+            "air flow meter",
+            "vane air",
+        )
+        unrelated_terms = (
+            "турбин",
+            "turbo",
+            "boost",
+            "датчик детонации",
+            "knock sensor",
+        )
+        has_airflow = any(term in blob for term in airflow_terms)
+        has_unrelated_only = any(term in blob for term in unrelated_terms) and not has_airflow
+        return has_airflow and not has_unrelated_only
+
+    text = _combined_request_text(data)
+    turbo_markers = ("\u0442\u0443\u0440\u0431\u0438\u043d", "turbo", "boost", "wastegate", "\u0432\u0435\u0441\u0442\u0433\u0435\u0439\u0442")
+    setup_markers = ("\u043d\u0430\u0441\u0442\u0440\u043e", "\u0440\u0435\u0433\u0443\u043b\u0438\u0440\u043e\u0432", "tune", "adjust", "setup", "set up")
+    turbo_setup_request = any(term in text for term in turbo_markers) and any(term in text for term in setup_markers)
+    if turbo_setup_request:
+        focus_terms = (
+            "\u0442\u0443\u0440\u0431\u0438\u043d",
+            "turbo",
+            "boost",
+            "wastegate",
+            "\u0432\u0435\u0441\u0442\u0433\u0435\u0439\u0442",
+            "\u043d\u0430\u0434\u0434\u0443\u0432",
+            "actuator",
+            "\u0430\u043a\u0442\u0443\u0430\u0442\u043e\u0440",
+            "boost controller",
+        )
+        unrelated_terms = (
+            "\u043f\u043e\u0434\u0432\u0435\u0441\u043a",
+            "suspension",
+            "transmission",
+            "\u0442\u0440\u0430\u043d\u0441\u043c\u0438\u0441",
+            "coolant temperature sensor",
+            "\u0434\u0430\u0442\u0447\u0438\u043a \u0442\u0435\u043c\u043f\u0435\u0440\u0430\u0442\u0443\u0440\u044b \u043e\u0445\u043b\u0430\u0436\u0434\u0430\u044e\u0449\u0435\u0439 \u0436\u0438\u0434\u043a\u043e\u0441\u0442\u0438",
+            "\u0434\u0442\u043e\u0436",
+        )
+        has_focus = any(term in blob for term in focus_terms)
+        has_only_unrelated = any(term in blob for term in unrelated_terms) and not has_focus
+        return has_focus and not has_only_unrelated
+
+    return True
 
 
 def _legacy_1g_gze_airflow_result(data: DiagnosticRequest) -> dict | None:
@@ -637,15 +679,16 @@ async def diagnose(data: DiagnosticRequest) -> dict:
             "РќРµ РїРѕРІС‚РѕСЂСЏР№ СЃС‚Р°СЂС‹Р№ РѕС‚РІРµС‚. РќР°Р№РґРё РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РїСЂРёС‡РёРЅС‹, СЂРµРґРєРёРµ РІРµСЂСЃРёРё, "
             "РїРѕРґС‚РІРµСЂР¶РґС‘РЅРЅС‹Рµ СЃР»СѓС‡Р°Рё Рё РЅРѕРІС‹Рµ СЂРµР°Р»СЊРЅС‹Рµ СЃСЃС‹Р»РєРё."
         )
+    search_hints = _build_search_hints(data)
+    if search_hints:
+        user_message += "\n\nSearch hints:\n- " + "\n- ".join(search_hints)
 
     openai_key = os.environ.get("OPENAI_API_KEY", "")
     if mode != "deep" and openai_key and OpenAI is not None:
         try:
             openai_client = OpenAI(api_key=openai_key)
-            search_hints = _build_search_hints(data)
             attempt_messages = [user_message]
             if search_hints:
-                attempt_messages[0] = user_message + "\n\nSearch hints:\n- " + "\n- ".join(search_hints)
                 attempt_messages.append(
                     user_message
                     + "\n\nStrict second pass for this request:\n- "

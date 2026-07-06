@@ -27,3 +27,4 @@
 - 2026-07-05: Changed feedback persistence so `helped/not helped` messages are stored in `user_feedback` and do not become separate diagnostic request questions; Deep Search rows keep the original symptom.
 - 2026-07-05: Saved brand/model/year/engine snapshots into `solved_cases` so shared successful cases remain useful after a user deletes a personal vehicle card.
 - 2026-07-05: Cleaned history output by trimming malformed embedded JSON/citations and returning readable vehicle labels instead of raw `vehicle_id` values.
+- 2026-07-06: Tightened parser answer sanitizing for component-specific searches. Backend now rejects embedded JSON / search-trace text as `parser_summary`, keeps turbo-focused link filtering, and Decision Engine formats structured parser results even when the raw summary is blank so replies do not fall back to generic warm-engine diagnostics.

@@ -625,10 +625,18 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             },
         )
 
-        if diagnosis_text and not parser_placeholder:
+        has_structured_parser_answer = bool(
+            diagnosis_text or probable_causes or first_checks or response_links
+        )
+
+        if has_structured_parser_answer and not parser_placeholder:
             answer_text = format_technical_answer(
                 language=state.language,
-                diagnosis=diagnosis_text or (probable_causes[0] if probable_causes else ""),
+                diagnosis=(
+                    diagnosis_text
+                    or (probable_causes[0] if probable_causes else "")
+                    or (first_checks[0] if first_checks else "")
+                ),
                 probable_causes=probable_causes,
                 first_checks=first_checks[:3],
                 less_likely=less_likely,
