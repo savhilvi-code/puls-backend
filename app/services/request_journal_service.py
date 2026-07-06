@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import re
+
 from fastapi import HTTPException
 
 from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError, get_supabase_client
 from app.services.formatter_service import _clean_text
 from app.services.kb_service import _clean_case_answer
-from datetime import datetime, timezone
-import re
+
+
+def _rows(response) -> list[dict]:
+    return getattr(response, "data", []) or []
 
 
 def _format_created_at(value: str | None) -> str:
@@ -20,19 +25,6 @@ def _format_created_at(value: str | None) -> str:
         return parsed.astimezone().strftime("%d.%m.%Y, %H:%M")
     except Exception:
         return raw
-
-
-def _derive_status(message_type: str) -> str:
-    message_type = str(message_type or "").strip().lower()
-    if message_type in {"greeting", "limit"}:
-        return message_type
-    if message_type in {"feedback_helped", "resolved"}:
-        return "resolved"
-    if message_type in {"feedback_not_helped", "followup_deep"}:
-        return "followup"
-    if message_type in {"clarification", "new_diagnostic", "parser", "kb_match", "followup"}:
-        return "open"
-    return "open"
 
 
 def _extract_vehicle_label(text: str) -> str:
@@ -66,7 +58,7 @@ def _extract_vehicle_label(text: str) -> str:
     words = normalized.split()
     for index in range(len(words)):
         if words[index].lower() == found:
-            label = " ".join(words[index:index + 7]).strip()
+            label = " ".join(words[index:index + 8]).strip()
             year = re.search(r"\b(19[8-9]\d|20[0-3]\d)\b", normalized)
             engine = re.search(r"\b(1g[- ]?gze|sr20vet|qr20|qr25|2gr|1gr|ej20|ej25|k20|k24|m57|n52|n54|n55|b58)\b", normalized, re.IGNORECASE)
             if year and year.group(0) not in label:
@@ -78,8 +70,7 @@ def _extract_vehicle_label(text: str) -> str:
 
 
 def _vehicle_label(row: dict | None) -> str:
-    if not row:
-        return ""
+    row = row or {}
     return " ".join(
         str(row.get(key) or "").strip()
         for key in ("brand", "model", "year", "engine")
@@ -87,52 +78,25 @@ def _vehicle_label(row: dict | None) -> str:
     )
 
 
-def _load_vehicle_labels(client, rows: list[dict]) -> dict[int, str]:
-    ids = sorted({int(row.get("vehicle_id")) for row in rows if row.get("vehicle_id")})
+def _load_vehicle_labels(client, conversation_rows: list[dict], diagnostic_rows: list[dict]) -> dict[int, str]:
+    ids = sorted(
+        {
+            int(row.get("vehicle_id"))
+            for row in [*conversation_rows, *diagnostic_rows]
+            if row.get("vehicle_id")
+        }
+    )
     if not ids:
         return {}
     try:
         response = client.table("vehicles").select("id,brand,model,year,engine").in_("id", ids).execute()
         return {
             int(row["id"]): _vehicle_label(row)
-            for row in (getattr(response, "data", []) or [])
+            for row in _rows(response)
             if row.get("id") and _vehicle_label(row)
         }
     except Exception:
         return {}
-
-
-async def save_diagnostic_request(*, user_id: int | None, normalized, answer: str, message_type: str, vehicle_id: int | None = None, vehicle_profile_id: int | None = None) -> dict | None:
-    if user_id is None:
-        return None
-
-    status = _derive_status(message_type)
-    if status == "greeting":
-        return None
-
-    payload = {
-        "user_id": user_id,
-        "vehicle_id": vehicle_id,
-        "vehicle_profile_id": vehicle_profile_id,
-        "question": str(normalized.text or "").strip(),
-        "answer": str(answer or "").strip(),
-        "language": str(normalized.language or "ru"),
-        "request_type": "text",
-        "status": status,
-        "source": str(normalized.source or "web"),
-    }
-
-    try:
-        client = get_supabase_client()
-        response = client.table("diagnostic_requests").insert(payload).execute()
-        rows = getattr(response, "data", []) or []
-        return rows[0] if rows else None
-    except SupabaseUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except SupabaseOperationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Failed to save diagnostic request: {exc}") from exc
 
 
 async def get_user_request_history(*, user_id: int | None = None, email: str = "", limit: int = 50) -> list[dict]:
@@ -147,8 +111,7 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
     resolved_user_id = user_id
     if resolved_user_id is None and email:
         try:
-            user_response = client.table("users").select("id,car_info,email").eq("email", email).limit(1).execute()
-            user_rows = getattr(user_response, "data", []) or []
+            user_rows = _rows(client.table("users").select("id,email").eq("email", email).limit(1).execute())
             if user_rows:
                 resolved_user_id = user_rows[0].get("id")
         except Exception as exc:
@@ -158,44 +121,130 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
         return []
 
     try:
-        response = (
-            client.table("diagnostic_requests")
-            .select("id,user_id,vehicle_id,vehicle_profile_id,question,answer,language,request_type,status,source,created_at,parser_used,deep_search_used,sources,videos")
+        conversation_rows = _rows(
+            client.table("conversations")
+            .select("id,user_id,vehicle_id,title,status,created_at,updated_at,last_message_at")
             .eq("user_id", resolved_user_id)
-            .order("created_at", desc=True)
+            .order("updated_at", desc=True)
             .limit(limit)
             .execute()
         )
-        rows = getattr(response, "data", []) or []
+        if not conversation_rows:
+            return []
+        conversation_ids = [int(row["id"]) for row in conversation_rows if row.get("id")]
+        message_rows = _rows(
+            client.table("messages")
+            .select("id,conversation_id,vehicle_id,role,message_text,language,created_at")
+            .in_("conversation_id", conversation_ids)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        diagnostic_rows = _rows(
+            client.table("diagnostic_requests")
+            .select("id,conversation_id,vehicle_id,question,answer,status,request_type,parser_used,deep_search_used,sources,videos,created_at")
+            .in_("conversation_id", conversation_ids)
+            .order("created_at", desc=True)
+            .execute()
+        )
     except SupabaseOperationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Failed to load diagnostic history: {exc}") from exc
+        raise HTTPException(status_code=503, detail=f"Failed to load request history: {exc}") from exc
 
-    vehicle_labels = _load_vehicle_labels(client, rows)
+    vehicle_labels = _load_vehicle_labels(client, conversation_rows, diagnostic_rows)
+    messages_by_conversation: dict[int, list[dict]] = {}
+    for row in message_rows:
+        cid = int(row.get("conversation_id") or 0)
+        messages_by_conversation.setdefault(cid, []).append(row)
+
+    diagnostic_by_conversation: dict[int, dict] = {}
+    for row in diagnostic_rows:
+        cid = int(row.get("conversation_id") or 0)
+        diagnostic_by_conversation.setdefault(cid, row)
+
     items: list[dict] = []
-    for row in rows:
-        question = row.get("question") or ""
-        answer, embedded_links = _clean_case_answer(row.get("answer") or "")
-        answer = _clean_text(answer, max_len=2600)
-        sources = row.get("sources") or embedded_links or []
+    for row in conversation_rows:
+        cid = int(row.get("id") or 0)
+        conversation_messages = messages_by_conversation.get(cid, [])
+        user_messages = [item for item in conversation_messages if str(item.get("role") or "") == "user"]
+        assistant_messages = [item for item in conversation_messages if str(item.get("role") or "") == "assistant"]
+        first_user = str((user_messages[0] if user_messages else {}).get("message_text") or row.get("title") or "").strip()
+        last_assistant = str((assistant_messages[-1] if assistant_messages else {}).get("message_text") or "").strip()
+        latest_request = diagnostic_by_conversation.get(cid, {})
+        answer_text, embedded_links = _clean_case_answer(str(latest_request.get("answer") or last_assistant or ""))
+        answer_text = _clean_text(answer_text, max_len=2600)
+        vehicle_label = (
+            vehicle_labels.get(int(row.get("vehicle_id") or 0), "")
+            or vehicle_labels.get(int(latest_request.get("vehicle_id") or 0), "")
+            or _extract_vehicle_label(str(latest_request.get("question") or first_user))
+        )
         items.append(
             {
-                "id": row.get("id"),
-                "question": question,
-                "answer": answer,
-                "date": _format_created_at(row.get("created_at")),
-                "status": row.get("status") or "",
-                "vehicle": vehicle_labels.get(int(row.get("vehicle_id") or 0), "") or _extract_vehicle_label(question),
-                "vehicle_id": row.get("vehicle_id"),
-                "type": row.get("request_type") or "text",
-                "source": row.get("source") or "web",
-                "sources": sources,
-                "videos": row.get("videos") or [],
-                "parser_used": bool(row.get("parser_used")),
-                "deep_search_used": bool(row.get("deep_search_used")),
+                "id": latest_request.get("id") or cid,
+                "conversation_id": cid,
+                "question": str(latest_request.get("question") or first_user),
+                "answer": answer_text,
+                "date": _format_created_at(row.get("updated_at") or row.get("last_message_at") or row.get("created_at")),
+                "status": str(latest_request.get("status") or row.get("status") or ""),
+                "vehicle": vehicle_label,
+                "vehicle_id": latest_request.get("vehicle_id") or row.get("vehicle_id"),
+                "type": str(latest_request.get("request_type") or "conversation"),
+                "source": "web",
+                "sources": latest_request.get("sources") or embedded_links or [],
+                "videos": latest_request.get("videos") or [],
+                "parser_used": bool(latest_request.get("parser_used")),
+                "deep_search_used": bool(latest_request.get("deep_search_used")),
                 "created_at": row.get("created_at") or "",
+                "message_count": len(conversation_messages),
             }
         )
-
     return items
+
+
+async def get_conversation_messages(*, conversation_id: int, user_id: int | None = None, email: str = "") -> list[dict]:
+    try:
+        client = get_supabase_client()
+    except SupabaseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    resolved_user_id = user_id
+    if resolved_user_id is None and email:
+        user_rows = _rows(client.table("users").select("id,email").eq("email", email).limit(1).execute())
+        if user_rows:
+            resolved_user_id = user_rows[0].get("id")
+    if resolved_user_id is None:
+        return []
+
+    conversation_rows = _rows(
+        client.table("conversations")
+        .select("id,user_id,vehicle_id")
+        .eq("id", conversation_id)
+        .eq("user_id", resolved_user_id)
+        .limit(1)
+        .execute()
+    )
+    if not conversation_rows:
+        return []
+
+    message_rows = _rows(
+        client.table("messages")
+        .select("id,conversation_id,vehicle_id,role,message_text,language,created_at")
+        .eq("conversation_id", conversation_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    vehicle_labels = _load_vehicle_labels(client, conversation_rows, message_rows)
+    return [
+        {
+            "id": row.get("id"),
+            "conversation_id": row.get("conversation_id"),
+            "vehicle_id": row.get("vehicle_id"),
+            "vehicle": vehicle_labels.get(int(row.get("vehicle_id") or 0), ""),
+            "role": row.get("role") or "",
+            "text": row.get("message_text") or "",
+            "language": row.get("language") or "ru",
+            "date": _format_created_at(row.get("created_at")),
+            "created_at": row.get("created_at") or "",
+        }
+        for row in message_rows
+    ]

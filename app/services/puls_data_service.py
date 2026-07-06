@@ -195,16 +195,32 @@ def delete_user_vehicle(*, user_id: int | None, vehicle_id: int | None) -> bool:
 
 def _vehicle_snapshot_from_text(car_info: str) -> dict[str, Any]:
     text = " ".join(str(car_info or "").split())
-    words = text.split()
     year_match = re.search(r"\b(19[8-9]\d|20[0-3]\d)\b", text)
     engine_match = re.search(
         r"\b(1g[- ]?gze|1ggze|sr20vet|qr20|qr25|2gr|1gr|ej20|ej25|k20|k24|m57|n52|n54|n55|b58)\b",
         text,
         re.IGNORECASE,
     )
+    brand_match = re.search(
+        r"\b(toyota|nissan|honda|mazda|subaru|mitsubishi|lexus|infiniti|bmw|mercedes(?:-benz)?|audi|volkswagen|ford|hyundai|kia)\b",
+        text,
+        re.IGNORECASE,
+    )
+    words = text.split()
+    brand = ""
+    model = ""
+    if brand_match:
+        brand = brand_match.group(0)
+        lowered_words = [word.lower() for word in words]
+        try:
+            brand_index = lowered_words.index(brand.lower())
+        except ValueError:
+            brand_index = -1
+        if brand_index >= 0 and brand_index + 1 < len(words):
+            model = words[brand_index + 1]
     return {
-        "brand": words[0] if words else "",
-        "model": words[1] if len(words) > 1 else "",
+        "brand": brand or (words[0] if words else ""),
+        "model": model or (words[1] if len(words) > 1 else ""),
         "year": int(year_match.group(0)) if year_match else None,
         "engine": engine_match.group(0) if engine_match else "",
     }
@@ -438,7 +454,7 @@ def create_solved_case(
     def operation():
         client = get_supabase_client()
         if diagnostic_request_id:
-            client.table("diagnostic_requests").update({"status": "resolved", "updated_at": _now_iso()}).eq("id", diagnostic_request_id).execute()
+            client.table("diagnostic_requests").update({"status": "solved", "updated_at": _now_iso()}).eq("id", diagnostic_request_id).execute()
         vehicle_row = None
         if vehicle_id:
             vehicle_response = client.table("vehicles").select("brand,model,year,engine").eq("id", vehicle_id).limit(1).execute()
@@ -507,7 +523,16 @@ def create_solved_case_from_diagnostic(
         user_id=user_id,
         vehicle_id=vehicle_id or diagnostic_request.get("vehicle_id"),
         diagnostic_request_id=diagnostic_request.get("id"),
-        car_info=car_info,
+        car_info=(
+            car_info
+            if (vehicle_id or diagnostic_request.get("vehicle_id"))
+            else str(
+                diagnostic_request.get("raw_question")
+                or diagnostic_request.get("question")
+                or diagnostic_request.get("symptoms")
+                or car_info
+            )
+        ),
         symptoms=str(diagnostic_request.get("symptoms") or diagnostic_request.get("raw_question") or diagnostic_request.get("question") or ""),
         confirmed_problem=str(diagnostic_request.get("symptoms") or diagnostic_request.get("question") or ""),
         confirmed_solution=str(diagnostic_request.get("answer") or ""),

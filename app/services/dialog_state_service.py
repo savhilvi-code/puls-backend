@@ -204,7 +204,19 @@ def build_dialog_state(normalized, user: UserRecord, decision: RouterDecision) -
     history_active_car = _extract_last_block_value(history, "active_car") or user.car_info
     history_symptom = _extract_last_block_value(history, "symptom")
 
-    active_car = str(decision.active_car or normalized.car_info or history_active_car or "").strip()
+    followup_uses_history_first = (
+        _looks_like_helped(current_text)
+        or _looks_like_not_helped(current_text)
+        or decision.message_type in {"followup", "followup_deep", "helped_feedback"}
+        or decision.user_says_helped
+        or decision.user_says_not_helped
+    )
+    active_car = str(decision.active_car or "").strip()
+    if not active_car:
+        if followup_uses_history_first:
+            active_car = str(history_active_car or normalized.car_info or user.car_info or "").strip()
+        else:
+            active_car = str(normalized.car_info or history_active_car or user.car_info or "").strip()
     if not active_car and _looks_like_car_info(current_text):
         active_car = current_text
 

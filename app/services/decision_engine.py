@@ -10,12 +10,12 @@ from app.services.kb_service import (
     find_matching_case,
     find_matching_history_case,
     increment_case_success,
-    save_knowledge_case,
 )
 from app.services.normalize_service import normalize_chat_input
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
 from app.services.puls_data_service import resolve_user_vehicle
 from app.services.router_service import route_message
+from app.services.subscription_service import can_run_parser, ensure_user_subscription, quota_payload
 from app.services.user_service import get_or_create_user, update_user_after_response
 
 
@@ -86,13 +86,14 @@ _CAR_BRANDS = (
 
 
 def _quota_payload(user) -> dict:
+    if getattr(user, "id", None):
+        return quota_payload(ensure_user_subscription(user_id=user.id))
     remaining = max(int(getattr(user, "requests_left", 0) or 0), 0)
-    limit = 100 if remaining > 10 else 10
     return {
         "remaining": remaining,
-        "used": max(limit - remaining, 0),
-        "limit": limit,
-        "plan_type": "paid" if limit == 100 else "free",
+        "used": max(10 - remaining, 0),
+        "limit": 10,
+        "plan_type": "free",
         "unlimited": False,
     }
 
@@ -345,6 +346,20 @@ def _vehicle_label(vehicle: dict | None) -> str:
     return " ".join(str(part).strip() for part in parts if part).strip()
 
 
+def _should_clear_vehicle_binding(*, active_car: str, resolved_car_label: str, mentioned_car: str, state) -> bool:
+    if not active_car:
+        return False
+    if mentioned_car:
+        return True
+    if getattr(state, "is_feedback_helped", False) or getattr(state, "is_feedback_not_helped", False):
+        return True
+    if getattr(state, "should_deep_search", False) or getattr(state, "message_type", "") in {"followup", "followup_deep"}:
+        return True
+    if resolved_car_label and not _vehicle_context_matches(resolved_car_label, active_car):
+        return True
+    return False
+
+
 async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     normalized = normalize_chat_input(payload, source=source)
     mentioned_car = _extract_active_car_from_text(normalized.text)
@@ -361,26 +376,30 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     if resolved_car_label:
         normalized = normalized.model_copy(update={"car_info": resolved_car_label})
 
-    if user.requests_left <= 0:
-        answer = "Your request limit is exhausted."
-        await update_user_after_response(
-            user,
-            normalized,
-            answer,
-            should_decrease_limit=False,
-            active_car=resolved_car_label or user.car_info or normalized.car_info,
-            symptom=normalized.text,
-            message_type="limit",
-            vehicle_id=vehicle_id,
-        )
-        return ChatResponse(answer=answer, links=[], quota=_quota_payload(user))
-
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
     if mentioned_car:
         state.active_car = mentioned_car
-    if resolved_car_label:
+    elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
         state.active_car = resolved_car_label
+
+    if state.active_car and _should_clear_vehicle_binding(
+        active_car=state.active_car,
+        resolved_car_label=resolved_car_label,
+        mentioned_car=mentioned_car,
+        state=state,
+    ):
+        dialog_vehicle = resolve_user_vehicle(
+            user_id=user.id,
+            car_text=state.active_car,
+        )
+        dialog_vehicle_label = _vehicle_label(dialog_vehicle)
+        if dialog_vehicle and dialog_vehicle_label:
+            vehicle_id = dialog_vehicle.get("id")
+            normalized = normalized.model_copy(update={"car_info": dialog_vehicle_label})
+            state.active_car = dialog_vehicle_label
+        elif not dialog_vehicle_label:
+            vehicle_id = None
 
     generic_component_query = _looks_like_generic_component_query(normalized.text, state.active_car)
 
@@ -427,6 +446,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="greeting",
             vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
@@ -441,6 +461,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="clarification",
             vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
@@ -455,6 +476,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.current_symptom,
             message_type="clarification",
             vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
@@ -463,7 +485,10 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         feedback_state.current_symptom = feedback_state.previous_symptom or feedback_state.current_symptom
         matched_feedback_case = await find_latest_case_for_feedback(feedback_state)
         if matched_feedback_case is not None:
-            await increment_case_success(matched_feedback_case.get("id"))
+            await increment_case_success(
+                matched_feedback_case.get("id"),
+                source_table=str(matched_feedback_case.get("source_table") or "knowledge_cases"),
+            )
 
         answer_text = (
             "Отлично, рад что помогло. Я сохранил этот успешный кейс в журнал решений."
@@ -479,6 +504,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             symptom=state.previous_symptom or state.current_symptom,
             message_type="feedback_helped",
             vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
@@ -550,10 +576,31 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 message_type="kb_match",
                 links=matched_case_links,
                 vehicle_id=vehicle_id,
+                force_new_conversation=bool(mentioned_car),
             )
             return ChatResponse(answer=answer_text, links=matched_case_links, quota=_quota_payload(user))
 
     if state.should_search:
+        can_run, subscription = can_run_parser(user_id=user.id)
+        if not can_run:
+            answer_text = (
+                "Лимит запросов PULS закончился. Нужен платный тариф, чтобы запустить Parser или Deep Search."
+                if state.language == "ru"
+                else "Your PULS request limit is exhausted. A paid plan is required to run Parser or Deep Search."
+            )
+            await update_user_after_response(
+                user,
+                normalized,
+                answer_text,
+                should_decrease_limit=False,
+                active_car=state.active_car,
+                symptom=state.current_symptom,
+                message_type="limit",
+                vehicle_id=vehicle_id,
+                force_new_conversation=bool(mentioned_car),
+            )
+            return ChatResponse(answer=answer_text, links=[], quota=quota_payload(subscription))
+
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
         parser_input = normalized.model_copy(update={"text": effective_symptom})
         try:
@@ -589,7 +636,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 user,
                 normalized,
                 answer_text,
-                should_decrease_limit=True,
+                should_decrease_limit=False,
                 active_car=state.active_car,
                 symptom=effective_symptom,
                 message_type="parser_fallback",
@@ -597,10 +644,9 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 parser_used=True,
                 deep_search_used=bool(state.should_deep_search),
                 vehicle_id=vehicle_id,
+                force_new_conversation=bool(mentioned_car),
             )
             return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
-
-        await save_knowledge_case(parser_input, decision, parsed_case)
 
         diagnosis_text = parsed_case.get("parser_summary") or ""
         extracted_cases = parsed_case.get("extracted_cases") or []
@@ -671,6 +717,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             deep_search_used=bool(state.should_deep_search),
             vehicle_id=vehicle_id,
             parsed_case=parsed_case,
+            force_new_conversation=bool(mentioned_car),
         )
         return ChatResponse(answer=answer_text, links=response_links, quota=_quota_payload(user))
 
@@ -684,5 +731,6 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         symptom=state.current_symptom,
         message_type="clarification",
         vehicle_id=vehicle_id,
+        force_new_conversation=bool(mentioned_car),
     )
     return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))

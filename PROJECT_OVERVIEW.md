@@ -109,6 +109,8 @@ flowchart LR
 - `vehicles.id` is used as the stable vehicle id for conversations, messages, parser runs, video library entries and diagnostic requests when the car belongs to the user.
 - If a user asks about another car that is not saved in "My car", Decision Engine keeps that car as dialog context without creating a vehicle card automatically.
 - `solved_cases` and later `knowledge_cases` are shared diagnostic knowledge. They keep vehicle snapshot data so successful solutions remain available even after a user deletes a personal vehicle card.
+- Runtime chat context now comes from `conversations/messages/diagnostic_requests` plus the current request, not from `users.conversation_history` or `users.car_info`.
+- Parser and Deep Search quota is derived from `subscriptions.requests_limit/requests_used` and is consumed only after a successful parser/deep-search persistence flow.
 
 ## 5. Frontend Architecture
 

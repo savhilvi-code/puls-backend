@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
+
+from app.database.supabase import get_supabase_client
+
+
+def _rows(response) -> list[dict]:
+    return getattr(response, "data", []) or []
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _extract_vehicle_label(text: str) -> str:
+    raw = " ".join(str(text or "").split())
+    if not raw:
+        return ""
+    match = re.search(
+        r"\b(toyota|nissan|honda|mazda|subaru|mitsubishi|lexus|infiniti|bmw|mercedes|audi|volkswagen|ford|hyundai|kia)\b.{0,40}",
+        raw,
+        re.IGNORECASE,
+    )
+    return match.group(0).strip() if match else ""
+
+
+def _vehicle_label(row: dict | None) -> str:
+    row = row or {}
+    parts = [row.get("brand"), row.get("model"), row.get("year"), row.get("engine")]
+    return " ".join(str(part).strip() for part in parts if str(part or "").strip()).strip()
+
+
+def _load_vehicle_labels(vehicle_ids: list[int]) -> dict[int, str]:
+    if not vehicle_ids:
+        return {}
+    response = (
+        get_supabase_client()
+        .table("vehicles")
+        .select("id,brand,model,year,engine")
+        .in_("id", sorted(set(vehicle_ids)))
+        .execute()
+    )
+    return {
+        int(row["id"]): _vehicle_label(row)
+        for row in _rows(response)
+        if row.get("id")
+    }
+
+
+def get_or_create_conversation(
+    *,
+    user_id: int | None,
+    vehicle_id: int | None,
+    title: str,
+    force_new_context: bool = False,
+) -> dict | None:
+    if user_id is None:
+        return None
+    client = get_supabase_client()
+    rows = _rows(
+        client.table("conversations")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .order("updated_at", desc=True)
+        .limit(10)
+        .execute()
+    )
+
+    chosen = None
+    if not force_new_context:
+        if vehicle_id is not None:
+            chosen = next((row for row in rows if row.get("vehicle_id") == vehicle_id), None)
+        else:
+            chosen = next((row for row in rows if not row.get("vehicle_id")), None)
+        if chosen is None and rows:
+            chosen = rows[0]
+
+    if chosen:
+        updates = {"last_message_at": _now_iso(), "updated_at": _now_iso()}
+        if title and not str(chosen.get("title") or "").strip():
+            updates["title"] = title[:160]
+        if vehicle_id != chosen.get("vehicle_id"):
+            updates["vehicle_id"] = vehicle_id
+        response = client.table("conversations").update(updates).eq("id", chosen["id"]).execute()
+        updated_rows = _rows(response)
+        return updated_rows[0] if updated_rows else {**chosen, **updates}
+
+    payload = {
+        "user_id": user_id,
+        "vehicle_id": vehicle_id,
+        "channel": "site",
+        "status": "active",
+        "title": title[:160] if title else "",
+        "last_message_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    response = client.table("conversations").insert(payload).execute()
+    created_rows = _rows(response)
+    return created_rows[0] if created_rows else None
+
+
+def save_message(
+    *,
+    conversation_id: int | None,
+    user_id: int | None,
+    vehicle_id: int | None,
+    role: str,
+    text: str,
+    language: str,
+) -> dict | None:
+    if conversation_id is None or user_id is None or not str(text or "").strip():
+        return None
+    response = get_supabase_client().table("messages").insert(
+        {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "vehicle_id": vehicle_id,
+            "role": role,
+            "message_text": str(text or "").strip(),
+            "language": language or "ru",
+        }
+    ).execute()
+    rows = _rows(response)
+    return rows[0] if rows else None
+
+
+def build_user_conversation_history(*, user_id: int | None, limit: int = 12) -> str:
+    if user_id is None:
+        return ""
+    client = get_supabase_client()
+    response = (
+        client.table("diagnostic_requests")
+        .select("id,vehicle_id,question,answer,status,request_type,created_at,sources")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = list(reversed(_rows(response)))
+    if not rows:
+        return ""
+    vehicle_labels = _load_vehicle_labels([int(row["vehicle_id"]) for row in rows if row.get("vehicle_id")])
+    blocks: list[str] = []
+    for row in rows:
+        question = str(row.get("question") or "").strip()
+        answer = str(row.get("answer") or "").strip()
+        active_car = (
+            vehicle_labels.get(int(row.get("vehicle_id") or 0), "")
+            or _extract_vehicle_label(question)
+        )
+        links = row.get("sources") or []
+        message_type = "parser"
+        if str(row.get("request_type") or "") == "kb":
+            message_type = "kb_match"
+        elif str(row.get("request_type") or "") == "deep_search":
+            message_type = "followup_deep"
+        block = [
+            "source: web",
+            f"message_type: {message_type}",
+            f"active_car: {active_car}",
+            f"symptom: {question}",
+            f"user: {question}",
+            f"assistant: {answer}",
+        ]
+        if isinstance(links, list) and links:
+            block.append("links:")
+            for item in links[:8]:
+                if isinstance(item, dict) and item.get("url"):
+                    block.append(f"- {item.get('title') or item.get('url')}: {item.get('url')}")
+        blocks.append("\n".join(block))
+    return "\n---\n".join(blocks)
+
+
+def get_latest_active_car(*, user_id: int | None) -> str:
+    if user_id is None:
+        return ""
+    client = get_supabase_client()
+    rows = _rows(
+        client.table("diagnostic_requests")
+        .select("vehicle_id,question,created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+    if not rows:
+        return ""
+    vehicle_ids = [int(row["vehicle_id"]) for row in rows if row.get("vehicle_id")]
+    labels = _load_vehicle_labels(vehicle_ids)
+    for row in rows:
+        if row.get("vehicle_id") and labels.get(int(row["vehicle_id"])):
+            return labels[int(row["vehicle_id"])]
+        label = _extract_vehicle_label(str(row.get("question") or ""))
+        if label:
+            return label
+    return ""

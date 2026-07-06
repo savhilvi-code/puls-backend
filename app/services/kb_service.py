@@ -165,6 +165,48 @@ def _row_links(row: dict) -> list[dict]:
     return []
 
 
+def _knowledge_case_rows(client) -> list[dict]:
+    response = client.table("knowledge_cases").select(
+        "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence,full_answer,raw_payload,forum_links"
+    ).order("success_count", desc=True).limit(100).execute()
+    rows = getattr(response, "data", []) or []
+    for row in rows:
+        row["source_table"] = "knowledge_cases"
+    return rows
+
+
+def _solved_case_rows(client) -> list[dict]:
+    response = client.table("solved_cases").select(
+        "id,brand,model,year,engine,symptoms,confirmed_problem,confirmed_solution,sources,videos,confidence,created_at"
+    ).order("created_at", desc=True).limit(100).execute()
+    rows = getattr(response, "data", []) or []
+    normalized: list[dict] = []
+    for row in rows:
+        title = " ".join(
+            str(row.get(key) or "").strip()
+            for key in ("brand", "model", "year", "engine")
+            if str(row.get(key) or "").strip()
+        ).strip()
+        normalized.append(
+            {
+                "id": row.get("id"),
+                "symptom_title": title,
+                "symptom_description": str(row.get("symptoms") or ""),
+                "confirmed_cause": str(row.get("confirmed_problem") or ""),
+                "recommended_action": str(row.get("confirmed_solution") or ""),
+                "country": "",
+                "source_type": "solved_case",
+                "success_count": 1,
+                "confidence": float(row.get("confidence") or 0.7),
+                "full_answer": str(row.get("confirmed_solution") or ""),
+                "raw_payload": row,
+                "forum_links": row.get("sources") or [],
+                "source_table": "solved_cases",
+            }
+        )
+    return normalized
+
+
 def _extract_embedded_case(text: str) -> dict:
     value = str(text or "").strip()
     if "{" not in value or "}" not in value:
@@ -335,10 +377,7 @@ def _score_case(row: dict, *, active_car: str, symptom: str, language: str, prev
 async def find_matching_case(state, decision):
     try:
         client = get_supabase_client()
-        response = client.table("knowledge_cases").select(
-            "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence,full_answer,raw_payload,forum_links"
-        ).order("success_count", desc=True).limit(100).execute()
-        rows = getattr(response, "data", []) or []
+        rows = [*_knowledge_case_rows(client), *_solved_case_rows(client)]
     except SupabaseUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SupabaseOperationError as exc:
@@ -522,8 +561,83 @@ async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
     return created
 
 
-async def increment_case_success(case_id: int | None) -> None:
-    if not case_id:
+async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, active_car: str = "", language: str = "ru") -> dict | None:
+    if not diagnostic_request:
+        return None
+    question = str(
+        diagnostic_request.get("raw_question")
+        or diagnostic_request.get("question")
+        or diagnostic_request.get("symptoms")
+        or ""
+    ).strip()
+    answer = str(diagnostic_request.get("answer") or "").strip()
+    if not question or not answer:
+        return None
+    if _is_placeholder_case(
+        {
+            "symptom_title": active_car or question,
+            "symptom_description": question,
+            "confirmed_cause": question,
+            "recommended_action": answer,
+            "full_answer": answer,
+        }
+    ):
+        return None
+    payload = {
+        "symptom_title": (active_car or question)[:500],
+        "symptom_description": question,
+        "confirmed_cause": question,
+        "recommended_action": answer[:4000],
+        "full_answer": answer,
+        "raw_payload": diagnostic_request,
+        "forum_links": _normalize_links(diagnostic_request.get("sources") or []),
+        "country": language,
+        "source_type": "confirmed_feedback",
+        "success_count": 1,
+        "confidence": 0.7,
+    }
+    try:
+        client = get_supabase_client()
+        existing_rows = _knowledge_case_rows(client)
+        for row in existing_rows:
+            haystack = " ".join(
+                [
+                    str(row.get("symptom_title") or ""),
+                    str(row.get("symptom_description") or ""),
+                    str(row.get("confirmed_cause") or ""),
+                    str(row.get("recommended_action") or ""),
+                    str(row.get("full_answer") or ""),
+                ]
+            )
+            if question and not _contains_any(haystack, question):
+                continue
+            if active_car and not _vehicle_context_matches(haystack, active_car):
+                continue
+            updated_payload = {
+                "recommended_action": answer[:4000],
+                "full_answer": answer,
+                "forum_links": payload["forum_links"],
+                "raw_payload": diagnostic_request,
+                "success_count": int(row.get("success_count") or 0) + 1,
+                "confidence": min(float(row.get("confidence") or 0.7) + 0.05, 1.0),
+            }
+            updated = (
+                client.table("knowledge_cases")
+                .update(updated_payload)
+                .eq("id", row.get("id"))
+                .execute()
+            )
+            updated_rows = getattr(updated, "data", []) or []
+            if updated_rows:
+                updated_rows[0]["source_table"] = "knowledge_cases"
+                return updated_rows[0]
+        return create_knowledge_case(payload)
+    except (SupabaseUnavailableError, SupabaseOperationError):
+        return None
+
+
+async def increment_case_success(case_id: int | None, *, source_table: str = "knowledge_cases") -> None:
+    if not case_id or source_table != "knowledge_cases":
         return
     try:
         client = get_supabase_client()
@@ -542,10 +656,7 @@ async def increment_case_success(case_id: int | None) -> None:
 async def find_latest_case_for_feedback(state) -> dict | None:
     try:
         client = get_supabase_client()
-        response = client.table("knowledge_cases").select(
-            "id,symptom_title,symptom_description,confirmed_cause,recommended_action,country,source_type,success_count,confidence,full_answer,raw_payload,forum_links"
-        ).order("id", desc=True).limit(200).execute()
-        rows = getattr(response, "data", []) or []
+        rows = [*_knowledge_case_rows(client), *_solved_case_rows(client)]
     except SupabaseUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SupabaseOperationError as exc:
@@ -557,7 +668,18 @@ async def find_latest_case_for_feedback(state) -> dict | None:
     active_car = str(getattr(state, "active_car", "") or "").strip()
     symptom = str(getattr(state, "previous_symptom", "") or getattr(state, "current_symptom", "") or "").strip()
 
-    for row in rows:
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            1 if row.get("source_table") == "knowledge_cases" else 0,
+            int(row.get("success_count") or 0),
+            float(row.get("confidence") or 0),
+            int(row.get("id") or 0),
+        ),
+        reverse=True,
+    )
+
+    for row in ordered_rows:
         haystack = " ".join(
             [
                 str(row.get("symptom_title") or ""),
