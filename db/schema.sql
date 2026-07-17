@@ -100,6 +100,13 @@ create table vehicles (
   nickname text,
   mileage integer,
   photo_url text,
+  displacement text,
+  power text,
+  torque text,
+  engine_type text,
+  cylinders text,
+  emissions text,
+  tank text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,6 +10,17 @@ from app.database.supabase import SupabaseOperationError, SupabaseUnavailableErr
 from app.services.puls_data_service import delete_user_vehicle, list_user_vehicles, save_user_vehicle
 
 router = APIRouter(prefix="/api/vehicles", tags=["vehicles"])
+
+VEHICLE_SPEC_NOTE_KEY = "_puls_vehicle_meta"
+VEHICLE_SPEC_FIELDS = (
+    "displacement",
+    "power",
+    "torque",
+    "engine_type",
+    "cylinders",
+    "emissions",
+    "tank",
+)
 
 
 class VehiclePayload(BaseModel):
@@ -29,6 +41,13 @@ class VehiclePayload(BaseModel):
     nickname: str = ""
     mileage: int | str | None = None
     photo_url: str = ""
+    displacement: str = ""
+    power: str = ""
+    torque: str = ""
+    engine_type: str = ""
+    cylinders: str = ""
+    emissions: str = ""
+    tank: str = ""
     country: str = ""
     city: str = ""
     notes: str = ""
@@ -54,7 +73,39 @@ def _resolve_user_id(*, user_id: int | None, auth_user_id: str = "", email: str 
     raise HTTPException(status_code=404, detail="User profile not found.")
 
 
+def _extract_vehicle_meta(notes: Any) -> tuple[dict[str, Any], str]:
+    raw_notes = str(notes or "").strip()
+    if not raw_notes:
+        return {}, ""
+    try:
+        parsed = json.loads(raw_notes)
+    except Exception:
+        return {}, raw_notes
+    if not isinstance(parsed, dict):
+        return {}, raw_notes
+    meta = parsed.get(VEHICLE_SPEC_NOTE_KEY)
+    if not isinstance(meta, dict):
+        return {}, raw_notes
+    manual_note = str(meta.get("manual_note") or "").strip()
+    return meta, manual_note
+
+
+def _pack_vehicle_notes(*, raw_notes: str, payload: VehiclePayload) -> str:
+    manual_note = raw_notes.strip()
+    meta: dict[str, str] = {}
+    for field in VEHICLE_SPEC_FIELDS:
+        value = str(getattr(payload, field, "") or "").strip()
+        if value:
+          meta[field] = value
+    if manual_note:
+        meta["manual_note"] = manual_note
+    if not meta:
+        return manual_note
+    return json.dumps({VEHICLE_SPEC_NOTE_KEY: meta}, ensure_ascii=False, separators=(",", ":"))
+
+
 def _vehicle_response(row: dict[str, Any]) -> dict[str, Any]:
+    meta, manual_note = _extract_vehicle_meta(row.get("notes"))
     return {
         "id": row.get("id"),
         "user_id": row.get("user_id"),
@@ -70,15 +121,23 @@ def _vehicle_response(row: dict[str, Any]) -> dict[str, Any]:
         "nickname": row.get("nickname") or "",
         "mileage": row.get("mileage") or "",
         "photo_url": row.get("photo_url") or "",
+        "displacement": row.get("displacement") or meta.get("displacement") or "",
+        "power": row.get("power") or meta.get("power") or "",
+        "torque": row.get("torque") or meta.get("torque") or "",
+        "engine_type": row.get("engine_type") or meta.get("engine_type") or "",
+        "cylinders": row.get("cylinders") or meta.get("cylinders") or "",
+        "emissions": row.get("emissions") or meta.get("emissions") or "",
+        "tank": row.get("tank") or meta.get("tank") or "",
         "country": row.get("country") or "",
         "city": row.get("city") or "",
-        "notes": row.get("notes") or "",
+        "notes": manual_note,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
 
 
 def _payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
+    packed_notes = _pack_vehicle_notes(raw_notes=payload.notes, payload=payload)
     data = {
         "brand": payload.brand.strip(),
         "model": payload.model.strip(),
@@ -94,7 +153,7 @@ def _payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
         "photo_url": payload.photo_url.strip(),
         "country": payload.country.strip(),
         "city": payload.city.strip(),
-        "notes": payload.notes.strip(),
+        "notes": packed_notes,
     }
     return data
 

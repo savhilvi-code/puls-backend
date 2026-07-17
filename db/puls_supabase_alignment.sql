@@ -40,6 +40,13 @@ alter table if exists public.vehicles
   add column if not exists country text,
   add column if not exists city text,
   add column if not exists fuel_type text,
+  add column if not exists displacement text,
+  add column if not exists power text,
+  add column if not exists torque text,
+  add column if not exists engine_type text,
+  add column if not exists cylinders text,
+  add column if not exists emissions text,
+  add column if not exists tank text,
   add column if not exists notes text;
 
 alter table if exists public.diagnostic_requests

@@ -168,6 +168,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/services/puls_data_service.py`: `vehicles`, `solved_cases`
 - `app/services/subscription_service.py`: `subscriptions`
 - `app/routers/vehicles.py`: `/api/vehicles` CRUD for user-owned vehicle cards. Deleting a user vehicle removes the personal card and vehicle service logs, while solved diagnostic cases keep a brand/model/year/engine snapshot for the shared knowledge base.
+- `app/routers/vehicles.py`: `/api/vehicles` also round-trips editable technical spec fields (`displacement`, `power`, `torque`, `engine_type`, `cylinders`, `emissions`, `tank`). For simpler live debugging these values are persisted safely through the existing `vehicles.notes` metadata envelope even before the optional explicit SQL columns are applied.
 - `db/puls_supabase_alignment.sql`: core runtime alignment for `subscriptions`, `payments`, `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `user_feedback`, `solved_cases`, `vehicle_service_logs` and `media_files`
 - Telegram transport removed: backend is web/API-only.
 
