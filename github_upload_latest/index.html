@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CarDiagnostic AI</title>
   <meta name="description" content="PULS для диагностики автомобиля, сервисной истории, ошибок DTC и мануалов.">
-  <link rel="stylesheet" href="assets/css/style.css?v=20260609-12">
+  <link rel="stylesheet" href="assets/css/style.css?v=20260717-01">
 </head>
 <body>
   <div class="app" id="app">
@@ -139,10 +139,22 @@
                       <span>VIN:</span><b id="carInfoVin" data-i18n="car.vinValue">Укажите VIN</b>
                     </div>
                   </div>
-                  <label class="car-photo-upload auth-required">
-                    <input id="carPhotoInput" type="file" accept="image/*">
-                    <span class="car-photo-label" data-i18n="car.photoUpload">Attach car photo</span>
-                  </label>
+                  <div class="car-photo-card auth-required">
+                    <label class="car-photo-upload" id="carPhotoUpload">
+                      <input id="carPhotoInput" type="file" accept="image/*">
+                      <span class="car-photo-label" data-i18n="car.photoUpload">Attach car photo</span>
+                    </label>
+                    <div class="car-photo-actions" id="carPhotoActions" hidden>
+                      <button class="car-photo-menu-btn" id="carPhotoMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false">
+                        <span data-i18n="car.photoMenu">Photo actions</span>
+                        <span class="car-photo-menu-arrow" aria-hidden="true">▾</span>
+                      </button>
+                      <div class="car-photo-menu" id="carPhotoMenu" hidden>
+                        <button type="button" id="replaceCarPhotoBtn" data-i18n="car.photoReplace">Replace photo</button>
+                        <button type="button" id="removeCarPhotoBtn" data-i18n="car.photoDelete">Delete photo</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="card car-form-card">
                   <div class="head car-section-head">
@@ -458,8 +470,8 @@
 
   <div class="toast" id="toast"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="assets/js/supabaseClient.js?v=20260531-22"></script>
-  <script src="assets/js/auth.js?v=20260606-01"></script>
-  <script src="assets/js/app.js?v=20260609-12"></script>
+  <script src="assets/js/supabaseClient.js?v=20260717-01"></script>
+  <script src="assets/js/auth.js?v=20260717-01"></script>
+  <script src="assets/js/app.js?v=20260717-01"></script>
 </body>
 </html>

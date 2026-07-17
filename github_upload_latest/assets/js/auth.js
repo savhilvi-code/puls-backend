@@ -44,6 +44,7 @@ async function updateProfileBlock() {
 
   if (!window.supabaseClient) {
     window.pulsCurrentUser = null;
+    window.pulsAppUser = null;
     name.textContent = "Гость";
     profileEmail.textContent = "Supabase не настроен";
     authBtn.style.display = "inline-flex";
@@ -57,6 +58,7 @@ async function updateProfileBlock() {
 
   if (!user) {
     window.pulsCurrentUser = null;
+    window.pulsAppUser = null;
     name.textContent = "Гость";
     profileEmail.textContent = "Войдите в аккаунт";
     authBtn.style.display = "inline-flex";
@@ -197,6 +199,7 @@ async function loginUser(email, password) {
 async function logoutUser() {
   if (!window.supabaseClient) return;
   await window.supabaseClient.auth.signOut();
+  window.pulsCurrentUser = null;
   window.pulsAppUser = null;
   await updateProfileBlock();
 }
