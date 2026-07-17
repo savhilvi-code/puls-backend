@@ -63,6 +63,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - Backend rejects empty vehicle payloads instead of creating blank `vehicles` rows.
 - When the same signed-in user submits the same VIN again, backend reuses the existing `vehicles` row and updates it.
 - When VIN is missing, backend falls back to a duplicate signature check on `brand/model/year/engine` so repeated create requests still collapse into one vehicle instead of multiplying records.
+- `POST /api/vehicles/enrich` is a draft-only enrichment path: it does not save anything, but it can use the PULS model plus web search to verify remaining vehicle fields and attach a representative car photo URL for the current draft.
 
 ## Services
 
@@ -88,6 +89,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/services/subscription_service.py`
 - `app/services/user_service.py`
 - `app/services/vehicle_service.py`
+- `app/services/vehicle_enrichment_service.py`
 
 ## Schemas
 

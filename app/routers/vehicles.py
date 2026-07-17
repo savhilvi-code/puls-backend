@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError, find_user_by_fields, get_user_by_id
 from app.services.puls_data_service import delete_user_vehicle, list_user_vehicles, save_user_vehicle
+from app.services.vehicle_enrichment_service import enrich_vehicle_profile
 
 router = APIRouter(prefix="/api/vehicles", tags=["vehicles"])
 
@@ -231,6 +232,34 @@ def _payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
     return data
 
 
+def _draft_vehicle_response(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": data.get("id") or "",
+        "brand": data.get("brand") or "",
+        "model": data.get("model") or "",
+        "year": data.get("year") or "",
+        "engine": data.get("engine") or "",
+        "fuel": data.get("fuel") or data.get("fuel_type") or "",
+        "fuel_type": data.get("fuel_type") or data.get("fuel") or "",
+        "transmission": data.get("transmission") or "",
+        "drive": data.get("drive") or "",
+        "vin": data.get("vin") or "",
+        "nickname": data.get("nickname") or "",
+        "mileage": data.get("mileage") or "",
+        "photo_url": data.get("photo_url") or "",
+        "displacement": data.get("displacement") or "",
+        "power": data.get("power") or "",
+        "torque": data.get("torque") or "",
+        "engine_type": data.get("engine_type") or "",
+        "cylinders": data.get("cylinders") or "",
+        "emissions": data.get("emissions") or "",
+        "tank": data.get("tank") or "",
+        "country": data.get("country") or "",
+        "city": data.get("city") or "",
+        "notes": data.get("notes") or "",
+    }
+
+
 @router.get("")
 async def get_vehicles(
     user_id: int | None = Query(default=None),
@@ -260,6 +289,17 @@ async def create_vehicle(payload: VehiclePayload) -> dict[str, Any]:
         if not row:
             raise HTTPException(status_code=500, detail="Vehicle was not saved.")
         return {"vehicle": _vehicle_response(row)}
+    except HTTPException:
+        raise
+    except (SupabaseUnavailableError, SupabaseOperationError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/enrich")
+async def enrich_vehicle(payload: VehiclePayload) -> dict[str, Any]:
+    try:
+        enriched = enrich_vehicle_profile(payload.model_dump())
+        return {"vehicle": _draft_vehicle_response(enriched)}
     except HTTPException:
         raise
     except (SupabaseUnavailableError, SupabaseOperationError) as exc:
