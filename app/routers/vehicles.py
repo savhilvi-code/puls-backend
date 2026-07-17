@@ -21,6 +21,7 @@ VEHICLE_SPEC_FIELDS = (
     "emissions",
     "tank",
 )
+VEHICLE_PRIMARY_IDENTITY_FIELDS = ("brand", "model", "year", "engine")
 
 
 class VehiclePayload(BaseModel):
@@ -60,6 +61,78 @@ def _safe_int(value: int | str | None) -> int | None:
     if not digits:
         return None
     return int(digits)
+
+
+def _clean_text(value: Any, *, upper: bool = False) -> str:
+    text = str(value or "").strip()
+    return text.upper() if upper else text
+
+
+def _payload_has_meaningful_vehicle_data(payload: VehiclePayload) -> bool:
+    return any(
+        _clean_text(getattr(payload, field, ""))
+        for field in (
+            "brand",
+            "model",
+            "year",
+            "engine",
+            "fuel",
+            "fuel_type",
+            "transmission",
+            "drive",
+            "vin",
+            "nickname",
+            "mileage",
+            "photo_url",
+            *VEHICLE_SPEC_FIELDS,
+        )
+    )
+
+
+def _find_duplicate_vehicle_row(*, user_id: int, payload: VehiclePayload) -> dict[str, Any] | None:
+    rows = list_user_vehicles(user_id=user_id)
+    if not rows:
+        return None
+
+    incoming_vin = _clean_text(payload.vin, upper=True)
+    if incoming_vin:
+        for row in rows:
+            if _clean_text(row.get("vin"), upper=True) == incoming_vin:
+                return row
+
+    brand = _clean_text(payload.brand).casefold()
+    model = _clean_text(payload.model).casefold()
+    year = _safe_int(payload.year)
+    engine = _clean_text(payload.engine).casefold()
+    if not (brand and model and (year or engine)):
+        return None
+
+    for row in rows:
+        row_brand = _clean_text(row.get("brand")).casefold()
+        row_model = _clean_text(row.get("model")).casefold()
+        row_year = _safe_int(row.get("year"))
+        row_engine = _clean_text(row.get("engine")).casefold()
+        if row_brand != brand or row_model != model:
+            continue
+        if year and row_year != year:
+            continue
+        if engine and row_engine != engine:
+            continue
+        return row
+    return None
+
+
+def _merge_vehicle_db_payload(existing_row: dict[str, Any], incoming_payload: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for key, value in incoming_payload.items():
+        if key in {"user_id", "updated_at"}:
+            merged[key] = value
+            continue
+        if value in (None, ""):
+            merged[key] = existing_row.get(key)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _resolve_user_id(*, user_id: int | None, auth_user_id: str = "", email: str = "") -> int:
@@ -177,7 +250,13 @@ async def get_vehicles(
 async def create_vehicle(payload: VehiclePayload) -> dict[str, Any]:
     try:
         user_id = _resolve_user_id(user_id=payload.user_id, auth_user_id=payload.auth_user_id, email=payload.email)
-        row = save_user_vehicle(user_id=user_id, vehicle_id=None, payload=_payload_to_db(payload))
+        if not _payload_has_meaningful_vehicle_data(payload):
+            raise HTTPException(status_code=400, detail="Vehicle payload is empty.")
+        db_payload = _payload_to_db(payload)
+        duplicate_row = _find_duplicate_vehicle_row(user_id=user_id, payload=payload)
+        effective_vehicle_id = int(duplicate_row["id"]) if duplicate_row and duplicate_row.get("id") else None
+        effective_payload = _merge_vehicle_db_payload(duplicate_row, db_payload) if duplicate_row else db_payload
+        row = save_user_vehicle(user_id=user_id, vehicle_id=effective_vehicle_id, payload=effective_payload)
         if not row:
             raise HTTPException(status_code=500, detail="Vehicle was not saved.")
         return {"vehicle": _vehicle_response(row)}

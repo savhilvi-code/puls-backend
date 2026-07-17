@@ -57,6 +57,13 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/routers/search.py`
 - `app/routers/vehicles.py`
 
+## Vehicle Persistence Notes
+
+- `POST /api/vehicles` now acts as a guarded create path, not a blind insert.
+- Backend rejects empty vehicle payloads instead of creating blank `vehicles` rows.
+- When the same signed-in user submits the same VIN again, backend reuses the existing `vehicles` row and updates it.
+- When VIN is missing, backend falls back to a duplicate signature check on `brand/model/year/engine` so repeated create requests still collapse into one vehicle instead of multiplying records.
+
 ## Services
 
 - `app/services/__init__.py`
