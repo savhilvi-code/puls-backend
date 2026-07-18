@@ -10,6 +10,8 @@ from app.services.openai_service import OpenAIRouterUnavailableError, get_openai
 
 CURRENT_YEAR_MAX = 2027
 WIKIPEDIA_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0"}
+FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
+JDM_CHASSIS_PATTERN = re.compile(r"^[A-Z0-9-]{8,18}$", re.IGNORECASE)
 
 VEHICLE_ENRICHMENT_SCHEMA = {
     "type": "object",
@@ -57,6 +59,7 @@ Use web search to verify vehicle facts.
 
 Rules:
 - Prefer exact VIN-based data when VIN is present.
+- If the identifier is a Japanese chassis/frame number rather than a 17-character VIN, use it to identify the exact car generation and stock engine where possible.
 - If a field is uncertain, return an empty string instead of guessing.
 - Keep existing user-provided values unless web evidence strongly supports a better value.
 - Never return a year earlier than 1981 or later than 2027. If uncertain, return empty year.
@@ -120,9 +123,32 @@ def _normalize_vehicle_payload(payload: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _classify_vehicle_identifier(value: str) -> str:
+    normalized = _clean_text(value).upper()
+    if not normalized:
+        return ""
+    if FULL_VIN_PATTERN.fullmatch(normalized):
+        return "vin"
+    if "-" in normalized and JDM_CHASSIS_PATTERN.fullmatch(normalized):
+        return "jdm_chassis"
+    return "generic"
+
+
 def _build_enrichment_input(vehicle: dict[str, str]) -> str:
+    identifier = vehicle["vin"]
+    identifier_type = _classify_vehicle_identifier(identifier)
+    if identifier_type == "vin":
+        identifier_block = f"VIN: {identifier}\n"
+    elif identifier_type == "jdm_chassis":
+        identifier_block = f"Japanese chassis/frame number: {identifier}\n"
+    elif identifier:
+        identifier_block = f"Vehicle identifier: {identifier}\n"
+    else:
+        identifier_block = "Vehicle identifier: \n"
+
     return (
         "Enrich this car draft.\n"
+        f"Identifier type: {identifier_type or 'unknown'}\n"
         f"Brand: {vehicle['brand']}\n"
         f"Model: {vehicle['model']}\n"
         f"Year: {vehicle['year']}\n"
@@ -130,8 +156,8 @@ def _build_enrichment_input(vehicle: dict[str, str]) -> str:
         f"Fuel: {vehicle['fuel']}\n"
         f"Drive: {vehicle['drive']}\n"
         f"Transmission: {vehicle['transmission']}\n"
-        f"VIN: {vehicle['vin']}\n"
-        f"Current displacement: {vehicle['displacement']}\n"
+        + identifier_block
+        + f"Current displacement: {vehicle['displacement']}\n"
         f"Current power: {vehicle['power']}\n"
         f"Current torque: {vehicle['torque']}\n"
         f"Current engine type: {vehicle['engine_type']}\n"

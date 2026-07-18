@@ -143,20 +143,20 @@ const SPLINE_SCENE_URL = "";
         "car.formTransmissionPlaceholder": "AT",
         "car.formMileage": "Mileage",
         "car.formMileagePlaceholder": "185000 km",
-        "car.formVin": "VIN",
-        "car.formVinPlaceholder": "JT...",
+        "car.formVin": "VIN / chassis",
+        "car.formVinPlaceholder": "JT..., JZX100-1234567",
         "car.formHint": "You can edit the data anytime. Later we can connect VIN or catalog auto-fill here.",
         "car.formSave": "Save car",
         "car.formSaved": "Car profile saved.",
         "car.formDemo": "Fill demo data",
-        "car.formLookup": "Decode VIN",
-        "car.formLookupHint": "Enter the full VIN and PULS will pull the available vehicle data automatically.",
-        "car.lookupReady": "Ready to decode VIN.",
-        "car.lookupSearching": "Decoding VIN...",
-        "car.lookupNeedVin": "Enter a full 17-character VIN to decode it.",
-        "car.lookupInvalid": "This VIN could not be decoded. Please check the number and try again.",
-        "car.lookupNotFound": "No matching vehicle data was found for this VIN.",
-        "car.lookupError": "VIN lookup failed. Please try again in a few seconds.",
+        "car.formLookup": "Decode VIN / chassis",
+        "car.formLookupHint": "Enter a full 17-character VIN or a Japanese chassis/frame number and PULS will pull the available vehicle data automatically.",
+        "car.lookupReady": "Ready to decode a VIN or chassis number.",
+        "car.lookupSearching": "Looking up vehicle data...",
+        "car.lookupNeedVin": "Enter a full 17-character VIN or a Japanese chassis/frame number like JZX100-1234567.",
+        "car.lookupInvalid": "This VIN or chassis number could not be decoded. Please check the number and try again.",
+        "car.lookupNotFound": "No matching vehicle data was found for this VIN or chassis number.",
+        "car.lookupError": "Vehicle lookup failed. Please try again in a few seconds.",
         "spec.displacement": "Engine displacement:",
         "spec.note": "These fields are filled automatically from vehicle data and can be edited manually.",
         "spec.unavailable": "No data",
@@ -353,24 +353,24 @@ const SPLINE_SCENE_URL = "";
         "car.formTransmissionPlaceholder": "АКПП",
         "car.formMileage": "Пробег",
         "car.formMileagePlaceholder": "185000 км",
-        "car.formVin": "VIN",
-        "car.formVinPlaceholder": "JT...",
+        "car.formVin": "VIN / номер кузова",
+        "car.formVinPlaceholder": "JT..., JZX100-1234567",
         "car.formHint": "Данные можно редактировать в любой момент. Позже сюда можно подключить авто-подтягивание по VIN или каталогу.",
         "car.formSave": "Сохранить машину",
         "car.formSaved": "Профиль машины сохранён.",
         "car.formDemo": "Заполнить пример",
-        "car.formLookup": "Распознать VIN",
-        "car.formLookupHint": "Введите VIN целиком, и PULS сам подтянет доступные данные по машине.",
+        "car.formLookup": "Распознать VIN / кузов",
+        "car.formLookupHint": "Введите полный VIN из 17 символов или японский номер кузова, и PULS сам подтянет доступные данные по машине.",
         "car.vehicleTitle": "Мои машины",
         "car.vehicleSubtitle": "Сохраняйте несколько автомобилей и переключайтесь между ними без потери контекста.",
         "car.addVehicle": "Добавить автомобиль",
         "car.deleteVehicle": "Удалить автомобиль",
-        "car.lookupReady": "Готов к распознаванию VIN.",
-        "car.lookupSearching": "Распознаю VIN...",
-        "car.lookupNeedVin": "Введите полный VIN из 17 символов, чтобы распознать его.",
-        "car.lookupInvalid": "Этот VIN не удалось распознать. Проверьте номер и попробуйте снова.",
-        "car.lookupNotFound": "По этому VIN не найдено подходящих данных по машине.",
-        "car.lookupError": "Не удалось получить данные по VIN. Попробуйте ещё раз через несколько секунд.",
+        "car.lookupReady": "Готов к распознаванию VIN или номера кузова.",
+        "car.lookupSearching": "Ищу данные по машине...",
+        "car.lookupNeedVin": "Введите полный VIN из 17 символов или японский номер кузова, например JZX100-1234567.",
+        "car.lookupInvalid": "Этот VIN или номер кузова не удалось распознать. Проверьте номер и попробуйте снова.",
+        "car.lookupNotFound": "По этому VIN или номеру кузова не найдено подходящих данных по машине.",
+        "car.lookupError": "Не удалось получить данные по машине. Попробуйте ещё раз через несколько секунд.",
         "spec.displacement": "Объем двигателя:",
         "spec.note": "Эти поля заполняются автоматически по данным автомобиля и могут редактироваться вручную.",
         "spec.unavailable": "Нет данных",
@@ -498,6 +498,7 @@ const SPLINE_SCENE_URL = "";
     window.pulsT = t;
 
     const VEHICLES_API_URL = "https://puls-backend-t3sn.onrender.com/api/vehicles";
+    const VEHICLE_ENRICH_URL = `${VEHICLES_API_URL}/enrich`;
     const VEHICLE_STORE_KEY = "puls_vehicle_store_v1";
     const VEHICLE_LEGACY_KEY = "puls_vehicle_profile_v1";
 
@@ -684,7 +685,14 @@ const SPLINE_SCENE_URL = "";
         mileage: row.mileage,
         vin: row.vin,
         nickname: row.nickname,
-        photoUrl: row.photo_url
+        photoUrl: row.photo_url,
+        displacement: row.displacement,
+        power: row.power,
+        torque: row.torque,
+        engineType: row.engine_type,
+        cylinders: row.cylinders,
+        emissions: row.emissions,
+        tank: row.tank
       });
     }
 
@@ -737,7 +745,14 @@ const SPLINE_SCENE_URL = "";
         vin: normalized.vin,
         nickname: normalized.nickname,
         mileage: normalized.mileage,
-        photo_url: normalized.photoUrl
+        photo_url: normalized.photoUrl,
+        displacement: normalized.displacement,
+        power: normalized.power,
+        torque: normalized.torque,
+        engine_type: normalized.engineType,
+        cylinders: normalized.cylinders,
+        emissions: normalized.emissions,
+        tank: normalized.tank
       };
       const hasServerId = /^\d+$/.test(String(normalized.id || "").trim());
       const url = hasServerId ? `${VEHICLES_API_URL}/${encodeURIComponent(normalized.id)}` : VEHICLES_API_URL;
@@ -834,8 +849,28 @@ const SPLINE_SCENE_URL = "";
       }
     }
 
+    function normalizeVehicleIdentifier(value) {
+      return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+    }
+
     function isFullVin(vin) {
-      return /^[A-HJ-NPR-Z0-9]{17}$/i.test(String(vin || "").trim());
+      return /^[A-HJ-NPR-Z0-9]{17}$/i.test(normalizeVehicleIdentifier(vin));
+    }
+
+    function isJdmChassisNumber(value) {
+      const normalized = normalizeVehicleIdentifier(value);
+      if (!normalized || isFullVin(normalized) || !normalized.includes("-")) return false;
+      if (normalized.length < 8 || normalized.length > 18) return false;
+      return /^[A-Z0-9-]+$/.test(normalized) && /-\d[A-Z0-9]{3,}$/i.test(normalized);
+    }
+
+    function isSupportedVehicleIdentifier(value) {
+      return isFullVin(value) || isJdmChassisNumber(value);
+    }
+
+    function hasDecodedVehicleIdentity(profile = {}) {
+      const normalized = normalizeVehicleProfile(profile);
+      return Boolean(normalized.brand || normalized.model || normalized.year || normalized.engine);
     }
 
     function decodeVinRecord(record = {}) {
@@ -871,6 +906,55 @@ const SPLINE_SCENE_URL = "";
       return normalizeVehicleProfile(normalized);
     }
 
+    async function enrichVehicleByIdentifier(identifier, previous = loadVehicleProfile()) {
+      const authUser = await getCurrentAuthUser().catch(() => null);
+      const appUser = await resolveAppUser().catch(() => null);
+      const response = await fetch(VEHICLE_ENRICH_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: appUser?.id || null,
+          auth_user_id: authUser?.id || "",
+          email: authUser?.email || "",
+          brand: previous.brand || "",
+          model: previous.model || "",
+          year: previous.year || "",
+          engine: previous.engine || "",
+          fuel: previous.fuel || "",
+          drive: previous.drive || "",
+          transmission: previous.transmission || "",
+          mileage: previous.mileage || "",
+          vin: identifier,
+          nickname: previous.nickname || "",
+          photo_url: previous.photoUrl || "",
+          displacement: previous.displacement || "",
+          power: previous.power || "",
+          torque: previous.torque || "",
+          engine_type: previous.engineType || "",
+          cylinders: previous.cylinders || "",
+          emissions: previous.emissions || "",
+          tank: previous.tank || ""
+        })
+      });
+      if (!response.ok) {
+        throw new Error(`Vehicle enrich failed with ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const enriched = mapVehicleFromApi(payload?.vehicle || {});
+      if (!hasDecodedVehicleIdentity(enriched)) {
+        return null;
+      }
+
+      const preserveManualEdits = normalizeVehicleIdentifier(previous.vin) === identifier;
+      const lookupData = { ...enriched, vin: identifier };
+      const merged = preserveManualEdits
+        ? mergeVehicleProfiles(previous, lookupData)
+        : mergeVehicleProfiles(lookupData, previous);
+      merged.id = previous.id;
+      return merged;
+    }
+
     function updateLookupStatus(message, state = "info") {
       const node = $("#carLookupStatus");
       if (!node) return;
@@ -879,8 +963,8 @@ const SPLINE_SCENE_URL = "";
     }
 
     async function lookupVehicleByVin(vin, { force = false } = {}) {
-      const normalizedVin = String(vin || "").trim().toUpperCase();
-      if (!isFullVin(normalizedVin)) {
+      const normalizedVin = normalizeVehicleIdentifier(vin);
+      if (!isSupportedVehicleIdentifier(normalizedVin)) {
         updateLookupStatus(t("car.lookupNeedVin"), "warn");
         return null;
       }
@@ -906,6 +990,25 @@ const SPLINE_SCENE_URL = "";
       updateLookupStatus(t("car.lookupSearching"), "info");
 
       try {
+        const previous = loadVehicleProfile();
+        if (!isFullVin(normalizedVin)) {
+          const enriched = await enrichVehicleByIdentifier(normalizedVin, previous);
+          if (!enriched) {
+            updateLookupStatus(t("car.lookupNotFound"), "warn");
+            return null;
+          }
+
+          setVinLookupCache(normalizedVin, enriched);
+          fillVehicleForm(enriched);
+          saveVehicleProfile(enriched);
+          void persistVehicleProfile(enriched).catch((error) => {
+            console.error("Vehicle enrich sync failed:", error);
+          });
+          updateLookupStatus(t("car.formSaved"), "ok");
+          renderLists();
+          return enriched;
+        }
+
         const response = await fetch(`${VIN_LOOKUP_URL}${encodeURIComponent(normalizedVin)}?format=json`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
@@ -913,6 +1016,18 @@ const SPLINE_SCENE_URL = "";
 
         const record = Array.isArray(data?.Results) ? data.Results[0] : null;
         if (!record) {
+          const enriched = await enrichVehicleByIdentifier(normalizedVin, previous);
+          if (enriched) {
+            setVinLookupCache(normalizedVin, enriched);
+            fillVehicleForm(enriched);
+            saveVehicleProfile(enriched);
+            void persistVehicleProfile(enriched).catch((error) => {
+              console.error("Vehicle enrich sync failed:", error);
+            });
+            updateLookupStatus(t("car.formSaved"), "ok");
+            renderLists();
+            return enriched;
+          }
           updateLookupStatus(t("car.lookupNotFound"), "warn");
           return null;
         }
@@ -920,12 +1035,23 @@ const SPLINE_SCENE_URL = "";
         const errorCode = String(record.ErrorCode || "").trim();
         const hasUsefulFields = Boolean(record.Make || record.Model || record.ModelYear || record.EngineModel);
         if (errorCode && errorCode !== "0" && errorCode !== "1" && !hasUsefulFields) {
+          const enriched = await enrichVehicleByIdentifier(normalizedVin, previous);
+          if (enriched) {
+            setVinLookupCache(normalizedVin, enriched);
+            fillVehicleForm(enriched);
+            saveVehicleProfile(enriched);
+            void persistVehicleProfile(enriched).catch((error) => {
+              console.error("Vehicle enrich sync failed:", error);
+            });
+            updateLookupStatus(t("car.formSaved"), "ok");
+            renderLists();
+            return enriched;
+          }
           updateLookupStatus(t("car.lookupInvalid"), "warn");
           return null;
         }
 
         const decoded = decodeVinRecord({ ...record, VIN: normalizedVin });
-        const previous = loadVehicleProfile();
         const keepPreviousModel = Boolean(previous.model && previous.brand && decoded.brand && previous.brand === decoded.brand);
         const preserveManualEdits = String(previous.vin || "").trim().toUpperCase() === normalizedVin;
         const lookupData = {
@@ -937,6 +1063,21 @@ const SPLINE_SCENE_URL = "";
           ? mergeVehicleProfiles(previous, lookupData)
           : mergeVehicleProfiles(lookupData, previous);
         merged.id = previous.id;
+
+        if (!hasDecodedVehicleIdentity(merged)) {
+          const enriched = await enrichVehicleByIdentifier(normalizedVin, previous);
+          if (enriched) {
+            setVinLookupCache(normalizedVin, enriched);
+            fillVehicleForm(enriched);
+            saveVehicleProfile(enriched);
+            void persistVehicleProfile(enriched).catch((error) => {
+              console.error("Vehicle enrich sync failed:", error);
+            });
+            updateLookupStatus(t("car.formSaved"), "ok");
+            renderLists();
+            return enriched;
+          }
+        }
 
         setVinLookupCache(normalizedVin, merged);
         fillVehicleForm(merged);
@@ -1139,7 +1280,7 @@ const SPLINE_SCENE_URL = "";
           updateLookupStatus(t("car.lookupReady"), "info");
           return;
         }
-        if (!isFullVin(vin)) {
+        if (!isSupportedVehicleIdentifier(vin)) {
           updateLookupStatus(t("car.lookupNeedVin"), "warn");
           return;
         }
@@ -1149,7 +1290,7 @@ const SPLINE_SCENE_URL = "";
       $("#carVinInput")?.addEventListener("blur", () => {
         clearTimeout(vehicleLookupTimer);
         const vin = $("#carVinInput")?.value || "";
-        if (isFullVin(vin)) {
+        if (isSupportedVehicleIdentifier(vin)) {
           lookupVehicleByVin(vin);
         }
       });
