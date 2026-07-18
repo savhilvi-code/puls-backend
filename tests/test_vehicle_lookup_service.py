@@ -82,6 +82,15 @@ class VehicleLookupServiceTests(unittest.IsolatedAsyncioTestCase):
         service.lookup_jdm_chassis.assert_awaited_once()
         service.lookup_vin.assert_not_called()
 
+    async def test_full_vin_does_not_use_open_web_search_provider(self):
+        service = VehicleLookupService()
+        for provider in service.vin_providers:
+            provider.lookup = AsyncMock(return_value=None)
+        with patch("app.services.vehicle_lookup_service.OpenWebSearchProvider.lookup", new=AsyncMock(return_value=VehicleLookupResult(status="probable", confidence=0.4, source="web_search")) ) as web_lookup:
+            result = await service.lookup("JN1TBNT30U0001234")
+        web_lookup.assert_not_awaited()
+        self.assertEqual(result.status, "not_found")
+
     def test_local_dictionary_returns_ambiguous_for_jzx100(self):
         service = VehicleLookupService()
         result = service.lookup_local_dictionary("JZX100-1234567")
