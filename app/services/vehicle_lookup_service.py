@@ -16,7 +16,7 @@ CURRENT_YEAR_MAX = 2027
 FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 INNER_SPACES_PATTERN = re.compile(r"\s+")
 JDM_CHASSIS_WITH_HYPHEN_PATTERN = re.compile(r"^([A-Z0-9]{2,8})-(\d{4,8})$", re.IGNORECASE)
-JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^([A-Z]{1,7}\d{1,3}[A-Z]?)(\d{4,8})$", re.IGNORECASE)
+JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^([A-Z]{2,7}\d{1,3}[A-Z]?)(\d{4,8})$", re.IGNORECASE)
 VALID_IDENTIFIER_CHARS_PATTERN = re.compile(r"^[A-Z0-9-]+$", re.IGNORECASE)
 VEHICLE_LOOKUP_SCHEMA = {
     "type": "object",
@@ -150,41 +150,6 @@ def _load_jdm_dictionary() -> dict[str, Any]:
         return {}
 
 
-def _split_compact_jdm_identifier(value: str) -> tuple[str, str]:
-    compact = _clean_text(value).upper().replace("-", "")
-    if not compact:
-        return "", ""
-
-    dictionary = _load_jdm_dictionary()
-    candidates: list[tuple[str, str]] = []
-    for serial_len in range(4, 9):
-        if len(compact) <= serial_len:
-            continue
-        code = compact[:-serial_len]
-        serial = compact[-serial_len:]
-        if not code or not serial.isdigit():
-            continue
-        if not re.fullmatch(r"[A-Z0-9]{1,8}", code):
-            continue
-        candidates.append((code, serial))
-
-    dictionary_matches = [(code, serial) for code, serial in candidates if code in dictionary]
-    if len(dictionary_matches) == 1:
-        return dictionary_matches[0]
-    if len(dictionary_matches) > 1:
-        return max(dictionary_matches, key=lambda item: len(item[0]))
-
-    regex_matches = []
-    for code, serial in candidates:
-        merged = f"{code}{serial}"
-        match = JDM_CHASSIS_COMPACT_PATTERN.fullmatch(merged)
-        if match and match.group(1) == code and match.group(2) == serial:
-            regex_matches.append((code, serial))
-    if not regex_matches:
-        return "", ""
-    return max(regex_matches, key=lambda item: len(item[0]))
-
-
 def normalize_identifier(raw_identifier: str) -> IdentifierContext:
     raw = str(raw_identifier or "")
     trimmed = raw.strip().upper()
@@ -198,10 +163,10 @@ def normalize_identifier(raw_identifier: str) -> IdentifierContext:
             normalized = f"{spaced_match.group(1)}-{spaced_match.group(2)}"
             compact = f"{spaced_match.group(1)}{spaced_match.group(2)}"
         elif compact_spaces.count("-") == 0:
-            code, serial = _split_compact_jdm_identifier(compact_spaces)
-            if code and serial:
-                normalized = f"{code}-{serial}"
-                compact = f"{code}{serial}"
+            compact_match = JDM_CHASSIS_COMPACT_PATTERN.fullmatch(compact_spaces)
+            if compact_match:
+                normalized = f"{compact_match.group(1)}-{compact_match.group(2)}"
+                compact = f"{compact_match.group(1)}{compact_match.group(2)}"
         elif compact_spaces.count("-") == 1:
             hyphen_match = JDM_CHASSIS_WITH_HYPHEN_PATTERN.fullmatch(compact_spaces)
             if hyphen_match:
@@ -243,9 +208,9 @@ def extract_jdm_chassis_code(identifier: str) -> str:
     match = JDM_CHASSIS_WITH_HYPHEN_PATTERN.fullmatch(normalized)
     if match:
         return match.group(1)
-    code, serial = _split_compact_jdm_identifier(compact)
-    if code and serial:
-        return code
+    compact_match = JDM_CHASSIS_COMPACT_PATTERN.fullmatch(compact)
+    if compact_match:
+        return compact_match.group(1)
     return ""
 
 
