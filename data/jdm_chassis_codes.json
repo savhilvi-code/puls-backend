@@ -8,9 +8,16 @@
   },
   "PNT30": {
     "brand": "Nissan",
-    "models": ["X-Trail GT"],
+    "models": ["X-Trail"],
     "years": "2000-2007",
     "possible_engines": ["SR20VET"],
+    "market": "JDM"
+  },
+  "E11": {
+    "brand": "Nissan",
+    "models": ["Note"],
+    "years": "2005-2012",
+    "possible_engines": ["CR14DE", "HR15DE"],
     "market": "JDM"
   },
   "NT30": {
@@ -32,6 +39,20 @@
     "models": ["Crown"],
     "years": "2003-2008",
     "possible_engines": ["4GR-FSE"],
+    "market": "JDM"
+  },
+  "NZE124": {
+    "brand": "Toyota",
+    "models": ["Corolla"],
+    "years": "2000-2006",
+    "possible_engines": ["1NZ-FE"],
+    "market": "JDM"
+  },
+  "GS131": {
+    "brand": "Toyota",
+    "models": ["Crown"],
+    "years": "1987-1991",
+    "possible_engines": ["1G"],
     "market": "JDM"
   }
 }
