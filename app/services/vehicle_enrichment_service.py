@@ -12,6 +12,7 @@ CURRENT_YEAR_MAX = 2027
 WIKIPEDIA_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0"}
 FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 JDM_CHASSIS_PATTERN = re.compile(r"^[A-Z0-9-]{8,18}$", re.IGNORECASE)
+JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^[A-Z]{2,5}\d{2,7}[A-Z]?\d{4,8}$", re.IGNORECASE)
 
 VEHICLE_ENRICHMENT_SCHEMA = {
     "type": "object",
@@ -129,7 +130,10 @@ def _classify_vehicle_identifier(value: str) -> str:
         return ""
     if FULL_VIN_PATTERN.fullmatch(normalized):
         return "vin"
-    if "-" in normalized and JDM_CHASSIS_PATTERN.fullmatch(normalized):
+    if (
+        JDM_CHASSIS_PATTERN.fullmatch(normalized)
+        and ("-" in normalized or JDM_CHASSIS_COMPACT_PATTERN.fullmatch(normalized))
+    ):
         return "jdm_chassis"
     return "generic"
 
