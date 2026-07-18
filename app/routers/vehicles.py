@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError, find_user_by_fields, get_user_by_id
 from app.services.puls_data_service import delete_user_vehicle, list_user_vehicles, save_user_vehicle
-from app.services.vehicle_enrichment_service import decode_vehicle_profile, enrich_vehicle_profile
+from app.services.vehicle_enrichment_service import enrich_vehicle_profile
 
 router = APIRouter(prefix="/api/vehicles", tags=["vehicles"])
 
@@ -300,17 +300,6 @@ async def enrich_vehicle(payload: VehiclePayload) -> dict[str, Any]:
     try:
         enriched = enrich_vehicle_profile(payload.model_dump())
         return {"vehicle": _draft_vehicle_response(enriched)}
-    except HTTPException:
-        raise
-    except (SupabaseUnavailableError, SupabaseOperationError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@router.post("/decode")
-async def decode_vehicle(payload: VehiclePayload) -> dict[str, Any]:
-    try:
-        decoded = decode_vehicle_profile(payload.model_dump())
-        return {"vehicle": _draft_vehicle_response(decoded)}
     except HTTPException:
         raise
     except (SupabaseUnavailableError, SupabaseOperationError) as exc:
