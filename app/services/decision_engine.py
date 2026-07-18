@@ -12,6 +12,7 @@ from app.services.kb_service import (
     increment_case_success,
 )
 from app.services.normalize_service import normalize_chat_input
+from app.services.openai_service import translate_segments
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
 from app.services.puls_data_service import resolve_user_vehicle
 from app.services.router_service import route_message
@@ -346,6 +347,28 @@ def _vehicle_label(vehicle: dict | None) -> str:
     return " ".join(str(part).strip() for part in parts if part).strip()
 
 
+async def _localize_links(links: list[dict], language: str) -> list[dict]:
+    if not links:
+        return []
+
+    titles = [str(item.get("title") or "") for item in links]
+    descriptions = [str(item.get("description") or "") for item in links]
+    localized_titles = await translate_segments(segments=titles, target_language=language)
+    localized_descriptions = await translate_segments(segments=descriptions, target_language=language)
+
+    localized_links: list[dict] = []
+    for index, item in enumerate(links):
+        localized = dict(item)
+        localized["title"] = localized_titles[index] if index < len(localized_titles) else localized.get("title", "")
+        localized["description"] = localized_descriptions[index] if index < len(localized_descriptions) else localized.get("description", "")
+        localized_links.append(localized)
+    return localized_links
+
+
+async def _localize_text_blocks(blocks: list[str], language: str) -> list[str]:
+    return await translate_segments(segments=blocks, target_language=language)
+
+
 def _should_clear_vehicle_binding(*, active_car: str, resolved_car_label: str, mentioned_car: str, state) -> bool:
     if not active_car:
         return False
@@ -561,10 +584,12 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             matched_case_answer, embedded_links = _clean_case_answer(matched_case_answer)
             if embedded_links and not matched_case_links:
                 matched_case_links = embedded_links
+            localized_answer, = await _localize_text_blocks([matched_case_answer], state.language)
+            localized_links = await _localize_links(matched_case_links, state.language)
             answer_text = format_from_kb(
                 language=state.language,
-                answer=matched_case_answer,
-                links=matched_case_links,
+                answer=localized_answer,
+                links=localized_links,
             )
             await update_user_after_response(
                 user,
@@ -574,11 +599,11 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 active_car=state.active_car,
                 symptom=state.current_symptom,
                 message_type="kb_match",
-                links=matched_case_links,
+                links=localized_links,
                 vehicle_id=vehicle_id,
                 force_new_conversation=bool(mentioned_car),
             )
-            return ChatResponse(answer=answer_text, links=matched_case_links, quota=_quota_payload(user))
+            return ChatResponse(answer=answer_text, links=localized_links, quota=_quota_payload(user))
 
     if state.should_search:
         can_run, subscription = can_run_parser(user_id=user.id)
@@ -676,23 +701,37 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         )
 
         if has_structured_parser_answer and not parser_placeholder:
+            localized_blocks = await _localize_text_blocks(
+                [diagnosis_text, *probable_causes, *first_checks, *less_likely],
+                state.language,
+            )
+            localized_diagnosis = localized_blocks[0] if localized_blocks else diagnosis_text
+            probable_start = 1
+            probable_end = probable_start + len(probable_causes)
+            checks_end = probable_end + len(first_checks)
+            less_end = checks_end + len(less_likely)
+            localized_probable_causes = localized_blocks[probable_start:probable_end]
+            localized_first_checks = localized_blocks[probable_end:checks_end]
+            localized_less_likely = localized_blocks[checks_end:less_end]
+            localized_links = await _localize_links(response_links, state.language)
             answer_text = format_technical_answer(
                 language=state.language,
                 diagnosis=(
-                    diagnosis_text
-                    or (probable_causes[0] if probable_causes else "")
-                    or (first_checks[0] if first_checks else "")
+                    localized_diagnosis
+                    or (localized_probable_causes[0] if localized_probable_causes else "")
+                    or (localized_first_checks[0] if localized_first_checks else "")
                 ),
-                probable_causes=probable_causes,
-                first_checks=first_checks[:3],
-                less_likely=less_likely,
-                links=response_links,
+                probable_causes=localized_probable_causes,
+                first_checks=localized_first_checks[:3],
+                less_likely=localized_less_likely,
+                links=localized_links,
                 question_tail=(
                     "Это помогло решить проблему? Если нет - напишите 'не помогло', и я запущу более глубокий поиск."
                     if state.language == "ru"
                     else "Did this solve the problem? If not, write 'not helped' and I will run a deeper search."
                 ),
             )
+            response_links = localized_links
         else:
             answer_text = _generic_diagnostic_fallback(
                 language=state.language,

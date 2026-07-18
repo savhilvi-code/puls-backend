@@ -6,6 +6,7 @@ from functools import lru_cache
 from openai import OpenAI
 
 from app.schemas.router import RouterDecision
+from app.utils.language import detect_language, normalize_language_code
 
 
 class OpenAIRouterUnavailableError(RuntimeError):
@@ -74,6 +75,19 @@ ROUTER_JSON_SCHEMA = {
 }
 
 
+TRANSLATION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "translations": {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+    },
+    "required": ["translations"],
+    "additionalProperties": False,
+}
+
+
 async def generate_router_decision(
     *, prompt: str, text: str, language: str, car_info: str, conversation_history: str
 ) -> RouterDecision:
@@ -127,6 +141,59 @@ async def classify_message(*, prompt: str, text: str, language: str, car_info: s
         car_info=car_info,
         conversation_history=conversation_history,
     )
+
+
+async def translate_segments(*, segments: list[str], target_language: str) -> list[str]:
+    normalized_target = normalize_language_code(target_language)
+    prepared = [str(segment or "") for segment in segments]
+    if not prepared:
+        return []
+
+    translatable_indexes = [
+        index
+        for index, segment in enumerate(prepared)
+        if segment.strip() and detect_language(segment) != normalized_target
+    ]
+    if not translatable_indexes or not is_configured():
+        return prepared
+
+    payload = {
+        "target_language": normalized_target,
+        "segments": [prepared[index] for index in translatable_indexes],
+    }
+
+    try:
+        client = get_openai_client()
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            instructions=(
+                "Translate each input segment into the requested target language. "
+                "Preserve meaning, line breaks, bullet structure, URLs, car brands, model codes, engine codes, "
+                "and technical abbreviations such as MAF, AFM, VAF, ECU, OBD. "
+                "Do not add explanations or commentary. Return only JSON."
+            ),
+            input=json.dumps(payload, ensure_ascii=False),
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "segment_translations",
+                    "description": "Translated text segments.",
+                    "schema": TRANSLATION_JSON_SCHEMA,
+                    "strict": True,
+                }
+            },
+        )
+        data = _extract_json(getattr(response, "output_text", "") or "")
+        translations = data.get("translations")
+        if not isinstance(translations, list) or len(translations) != len(translatable_indexes):
+            return prepared
+
+        localized = list(prepared)
+        for index, translated in zip(translatable_indexes, translations):
+            localized[index] = str(translated or localized[index])
+        return localized
+    except Exception:
+        return prepared
 
 
 async def generate_diagnostic_answer(*, text: str, car_info: str, language: str):
