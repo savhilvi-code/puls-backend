@@ -13,6 +13,7 @@ WIKIPEDIA_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0"}
 FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 JDM_CHASSIS_PATTERN = re.compile(r"^[A-Z0-9-]{8,18}$", re.IGNORECASE)
 JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^(?:[A-Z]{2,5}\d{5,10}|[A-Z]{2,5}\d{2,7}[A-Z]?\d{4,8})$", re.IGNORECASE)
+JDM_CHASSIS_PARTS_PATTERN = re.compile(r"^([A-Z]{1,5}\d{2,3}[A-Z]?)-?(\d{4,8})$", re.IGNORECASE)
 
 VEHICLE_ENRICHMENT_SCHEMA = {
     "type": "object",
@@ -61,6 +62,7 @@ Use web search to verify vehicle facts.
 Rules:
 - Prefer exact VIN-based data when VIN is present.
 - If the identifier is a Japanese chassis/frame number rather than a 17-character VIN, use it to identify the exact car generation and stock engine where possible.
+- If a chassis code candidate is provided, match that exact code. Do not add or remove digits from it. For example, `PNT30` is not `PNT3000`.
 - If a field is uncertain, return an empty string instead of guessing.
 - Keep existing user-provided values unless web evidence strongly supports a better value.
 - Never return a year earlier than 1981 or later than 2027. If uncertain, return empty year.
@@ -138,13 +140,27 @@ def _classify_vehicle_identifier(value: str) -> str:
     return "generic"
 
 
+def _extract_jdm_chassis_parts(value: str) -> tuple[str, str]:
+    normalized = _clean_text(value).upper()
+    compact = normalized.replace("-", "")
+    match = JDM_CHASSIS_PARTS_PATTERN.fullmatch(normalized) or JDM_CHASSIS_PARTS_PATTERN.fullmatch(compact)
+    if not match:
+        return "", ""
+    return str(match.group(1) or "").upper(), str(match.group(2) or "").upper()
+
+
 def _build_enrichment_input(vehicle: dict[str, str]) -> str:
     identifier = vehicle["vin"]
     identifier_type = _classify_vehicle_identifier(identifier)
+    chassis_code, chassis_serial = _extract_jdm_chassis_parts(identifier)
     if identifier_type == "vin":
         identifier_block = f"VIN: {identifier}\n"
     elif identifier_type == "jdm_chassis":
-        identifier_block = f"Japanese chassis/frame number: {identifier}\n"
+        identifier_block = (
+            f"Japanese chassis/frame number: {identifier}\n"
+            f"Chassis code candidate: {chassis_code}\n"
+            f"Serial candidate: {chassis_serial}\n"
+        )
     elif identifier:
         identifier_block = f"Vehicle identifier: {identifier}\n"
     else:
@@ -291,6 +307,8 @@ def _run_model_enrichment(vehicle: dict[str, str]) -> dict[str, str]:
 
 def enrich_vehicle_profile(payload: dict[str, Any]) -> dict[str, str]:
     vehicle = _normalize_vehicle_payload(payload)
+    identifier_type = _classify_vehicle_identifier(vehicle.get("vin", ""))
+    chassis_code, _ = _extract_jdm_chassis_parts(vehicle.get("vin", ""))
 
     try:
         enrichment = _run_model_enrichment(vehicle)
@@ -320,6 +338,18 @@ def enrich_vehicle_profile(payload: dict[str, Any]) -> dict[str, str]:
         incoming = _clean_text(enrichment.get(key))
         if incoming:
             merged[key] = incoming
+
+    if identifier_type == "jdm_chassis" and chassis_code in {"T30", "NT30", "PNT30"}:
+        merged["brand"] = "Nissan"
+        merged["model"] = "X-Trail"
+        if str(merged.get("year") or "").isdigit() and int(str(merged["year"])) < 2000:
+            merged["year"] = ""
+        if str(merged.get("engine") or "").upper() == "VG30DE":
+            merged["engine"] = ""
+        if str(merged.get("drive") or "").upper() == "RWD":
+            merged["drive"] = ""
+        if "3000" in str(merged.get("photo_url") or "") or "300zx" in str(merged.get("photo_url") or "").lower():
+            merged["photo_url"] = ""
 
     merged["photo_url"] = _find_vehicle_photo(merged, enrichment)
     return merged
