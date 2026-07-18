@@ -521,6 +521,7 @@ class VehicleLookupService:
             NhtsaVinProvider("DecodeVinValuesExtended", "free_vin_api"),
             NhtsaVinProvider("DecodeVinValues", "free_vin_api_backup"),
             LocalVinDecoderProvider(),
+            OpenWebSearchProvider(),
         ]
         self.jdm_providers: list[VehicleLookupProvider] = [
             self.jdm_dictionary_provider,
