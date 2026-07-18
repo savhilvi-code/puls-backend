@@ -5,6 +5,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from app.services.openai_service import OpenAIRouterUnavailableError, get_openai_client, is_configured
@@ -14,10 +15,12 @@ WIKIPEDIA_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0"}
 JSON_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0", "Accept": "application/json"}
 FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 JDM_CHASSIS_PATTERN = re.compile(r"^[A-Z0-9-]{8,18}$", re.IGNORECASE)
-JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^(?:[A-Z]{2,5}\d{5,10}|[A-Z]{2,7}[A-Z]?\d{4,8})$", re.IGNORECASE)
-JDM_CHASSIS_PARTS_PATTERN = re.compile(r"^([A-Z]{2,7}[A-Z]?)-?(\d{4,8})$", re.IGNORECASE)
+JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^(?:[A-Z]{1,5}\d{5,10}|[A-Z]{1,7}[A-Z]?\d{4,8})$", re.IGNORECASE)
+JDM_CHASSIS_PARTS_PATTERN = re.compile(r"^([A-Z]{1,7}[A-Z]?)-?(\d{4,8})$", re.IGNORECASE)
 CARJAM_API_BASE_URL = os.getenv("CARJAM_API_BASE_URL", "https://www.carjam.co.nz").rstrip("/")
 CARJAM_API_KEY = os.getenv("CARJAM_API_KEY", "").strip()
+ROOT_DIR = Path(__file__).resolve().parents[2]
+JDM_CHASSIS_DATA_PATH = ROOT_DIR / "data" / "jdm_chassis_codes.json"
 
 VEHICLE_ENRICHMENT_SCHEMA = {
     "type": "object",
@@ -101,6 +104,15 @@ def _normalize_year(value: Any) -> str:
     return str(year)
 
 
+def _load_jdm_dictionary() -> dict[str, Any]:
+    if not JDM_CHASSIS_DATA_PATH.exists():
+        return {}
+    try:
+        return json.loads(JDM_CHASSIS_DATA_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def _normalize_vehicle_payload(payload: dict[str, Any]) -> dict[str, str]:
     return {
         "id": _clean_text(payload.get("id")),
@@ -143,6 +155,23 @@ def _classify_vehicle_identifier(value: str) -> str:
 def _extract_jdm_chassis_parts(value: str) -> tuple[str, str]:
     normalized = _clean_text(value).upper()
     compact = normalized.replace("-", "")
+    dictionary = _load_jdm_dictionary()
+
+    matches: list[tuple[str, str]] = []
+    for serial_len in range(4, 9):
+        if len(compact) <= serial_len:
+            continue
+        code = compact[:-serial_len]
+        serial = compact[-serial_len:]
+        if not code or not serial.isdigit():
+            continue
+        if code in dictionary:
+            matches.append((code, serial))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        return max(matches, key=lambda item: len(item[0]))
+
     match = JDM_CHASSIS_PARTS_PATTERN.fullmatch(normalized) or JDM_CHASSIS_PARTS_PATTERN.fullmatch(compact)
     if not match:
         return "", ""
@@ -316,6 +345,46 @@ def _lookup_carjam_jdm_chassis(chassis: str) -> dict[str, str]:
     }
 
 
+def _lookup_local_jdm_chassis(chassis: str) -> dict[str, str]:
+    normalized = _normalize_jdm_chassis(chassis)
+    code, _serial = _extract_jdm_chassis_parts(normalized)
+    if not code:
+        return {}
+
+    record = _load_jdm_dictionary().get(code)
+    if not isinstance(record, dict):
+        return {}
+
+    brand = _clean_text(record.get("brand"))
+    model = _clean_text(record.get("model"))
+    year = _clean_text(record.get("year"))
+    engine = _clean_text(record.get("engine"))
+    fuel = _clean_text(record.get("fuel"))
+    drive = _clean_text(record.get("drive"))
+    transmission = _clean_text(record.get("transmission"))
+    photo_query = " ".join(part for part in (brand, model, year) if part).strip()
+
+    return {
+        "brand": brand,
+        "model": model,
+        "year": year,
+        "engine": engine,
+        "fuel": fuel,
+        "fuel_type": fuel,
+        "transmission": transmission,
+        "drive": drive,
+        "displacement": _clean_text(record.get("displacement")),
+        "power": _clean_text(record.get("power")),
+        "torque": _clean_text(record.get("torque")),
+        "engine_type": _clean_text(record.get("engine_type")),
+        "cylinders": _clean_text(record.get("cylinders")),
+        "emissions": _clean_text(record.get("emissions")),
+        "tank": _clean_text(record.get("tank")),
+        "photo_query": photo_query,
+        "wikipedia_title": _clean_text(record.get("wikipedia_title")),
+    }
+
+
 def _find_vehicle_photo(vehicle: dict[str, str], enrichment: dict[str, str]) -> str:
     if vehicle.get("photo_url"):
         return vehicle["photo_url"]
@@ -394,6 +463,35 @@ def enrich_vehicle_profile(payload: dict[str, Any]) -> dict[str, str]:
     identifier_type = _classify_vehicle_identifier(vehicle.get("vin", ""))
 
     if identifier_type == "jdm_chassis":
+        try:
+            enrichment = _lookup_local_jdm_chassis(vehicle.get("vin", ""))
+        except Exception:
+            enrichment = {}
+        if enrichment:
+            merged = dict(vehicle)
+            for key in (
+                "brand",
+                "model",
+                "year",
+                "engine",
+                "fuel",
+                "fuel_type",
+                "transmission",
+                "drive",
+                "displacement",
+                "power",
+                "torque",
+                "engine_type",
+                "cylinders",
+                "emissions",
+                "tank",
+            ):
+                incoming = _clean_text(enrichment.get(key))
+                if incoming:
+                    merged[key] = incoming
+            merged["photo_url"] = _find_vehicle_photo(merged, enrichment)
+            return merged
+
         try:
             enrichment = _lookup_carjam_jdm_chassis(vehicle.get("vin", ""))
         except Exception:

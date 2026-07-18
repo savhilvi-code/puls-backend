@@ -1,0 +1,36 @@
+{
+  "PNT30": {
+    "brand": "Nissan",
+    "model": "X-Trail",
+    "year": "2002",
+    "engine": "SR20VET",
+    "fuel": "Petrol",
+    "drive": "4WD",
+    "transmission": "AT",
+    "power": "280 hp"
+  },
+  "E11": {
+    "brand": "Nissan",
+    "model": "Note",
+    "year": "2008",
+    "power": "109 hp"
+  },
+  "NZE124": {
+    "brand": "Toyota",
+    "model": "Corolla",
+    "year": "2001",
+    "engine": "1NZ-FE",
+    "fuel": "Petrol",
+    "drive": "4WD",
+    "power": "105 hp"
+  },
+  "GS131": {
+    "brand": "Toyota",
+    "model": "Crown",
+    "year": "1988",
+    "engine": "1G",
+    "fuel": "Petrol",
+    "power": "135 hp",
+    "displacement": "1988 cc"
+  }
+}
