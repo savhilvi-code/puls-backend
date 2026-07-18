@@ -1,0 +1,37 @@
+{
+  "JZX100": {
+    "brand": "Toyota",
+    "models": ["Chaser", "Mark II", "Cresta"],
+    "years": "1996-2001",
+    "possible_engines": ["1JZ-GE", "1JZ-GTE"],
+    "market": "JDM"
+  },
+  "PNT30": {
+    "brand": "Nissan",
+    "models": ["X-Trail GT"],
+    "years": "2000-2007",
+    "possible_engines": ["SR20VET"],
+    "market": "JDM"
+  },
+  "NT30": {
+    "brand": "Nissan",
+    "models": ["X-Trail"],
+    "years": "2000-2007",
+    "possible_engines": ["QR20DE", "QR25DE"],
+    "market": "JDM"
+  },
+  "T30": {
+    "brand": "Nissan",
+    "models": ["X-Trail"],
+    "years": "2000-2007",
+    "possible_engines": ["QR20DE", "QR25DE"],
+    "market": "JDM"
+  },
+  "GRS180": {
+    "brand": "Toyota",
+    "models": ["Crown"],
+    "years": "2003-2008",
+    "possible_engines": ["4GR-FSE"],
+    "market": "JDM"
+  }
+}
