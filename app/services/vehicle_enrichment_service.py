@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -10,10 +12,73 @@ from app.services.openai_service import OpenAIRouterUnavailableError, get_openai
 
 CURRENT_YEAR_MAX = 2027
 WIKIPEDIA_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0"}
+JSON_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0", "Accept": "application/json"}
 FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 JDM_CHASSIS_PATTERN = re.compile(r"^[A-Z0-9-]{8,18}$", re.IGNORECASE)
 JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^(?:[A-Z]{2,5}\d{5,10}|[A-Z]{2,5}\d{2,7}[A-Z]?\d{4,8})$", re.IGNORECASE)
 JDM_CHASSIS_PARTS_PATTERN = re.compile(r"^([A-Z]{1,5}\d{2,3}[A-Z]?)-?(\d{4,8})$", re.IGNORECASE)
+VINDECODER_API_BASE_URL = os.getenv("VINDECODER_API_BASE_URL", "https://bp.autoiso.pl/api/v3").rstrip("/")
+VINDECODER_API_UID = os.getenv("VINDECODER_API_UID", "").strip()
+VINDECODER_API_KEY = os.getenv("VINDECODER_API_KEY", "").strip()
+KNOWN_JDM_CHASSIS_PROFILES: dict[str, dict[str, str]] = {
+    "PNT30": {
+        "brand": "Nissan",
+        "model": "X-Trail GT",
+        "year": "",
+        "engine": "SR20VET",
+        "fuel": "Gasoline",
+        "fuel_type": "Gasoline",
+        "transmission": "4-speed automatic",
+        "drive": "4WD",
+        "displacement": "2.0L",
+        "power": "280 PS",
+        "torque": "309 Nm",
+        "engine_type": "Turbocharged inline-4",
+        "cylinders": "4",
+        "emissions": "",
+        "tank": "",
+        "photo_query": "Nissan X-Trail GT PNT30",
+        "wikipedia_title": "Nissan X-Trail",
+    },
+    "NT30": {
+        "brand": "Nissan",
+        "model": "X-Trail",
+        "year": "",
+        "engine": "",
+        "fuel": "",
+        "fuel_type": "",
+        "transmission": "",
+        "drive": "4WD",
+        "displacement": "",
+        "power": "",
+        "torque": "",
+        "engine_type": "",
+        "cylinders": "",
+        "emissions": "",
+        "tank": "",
+        "photo_query": "Nissan X-Trail NT30",
+        "wikipedia_title": "Nissan X-Trail",
+    },
+    "T30": {
+        "brand": "Nissan",
+        "model": "X-Trail",
+        "year": "",
+        "engine": "",
+        "fuel": "",
+        "fuel_type": "",
+        "transmission": "",
+        "drive": "",
+        "displacement": "",
+        "power": "",
+        "torque": "",
+        "engine_type": "",
+        "cylinders": "",
+        "emissions": "",
+        "tank": "",
+        "photo_query": "Nissan X-Trail T30",
+        "wikipedia_title": "Nissan X-Trail",
+    },
+}
 
 VEHICLE_ENRICHMENT_SCHEMA = {
     "type": "object",
@@ -261,6 +326,120 @@ def _find_vehicle_photo(vehicle: dict[str, str], enrichment: dict[str, str]) -> 
     return ""
 
 
+def _extract_provider_value(container: dict[str, Any], key: str) -> str:
+    entry = container.get(key)
+    if isinstance(entry, dict):
+        return _clean_text(entry.get("value"))
+    return _clean_text(entry)
+
+
+def _fetch_json(url: str) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers=JSON_API_HEADERS)
+    with urllib.request.urlopen(request, timeout=18) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _decode_with_vindecoder(vin: str) -> dict[str, str]:
+    if not (VINDECODER_API_UID and VINDECODER_API_KEY):
+        return {}
+
+    checksum = hashlib.md5(f"{VINDECODER_API_UID}{VINDECODER_API_KEY}{vin}".encode("utf-8")).hexdigest()
+    url = (
+        f"{VINDECODER_API_BASE_URL}/getDecoderFree/"
+        f"apiuid:{urllib.parse.quote(VINDECODER_API_UID)}/"
+        f"checksum:{checksum}/"
+        f"vin:{urllib.parse.quote(vin)}/"
+        "lang:en"
+    )
+    payload = _fetch_json(url)
+    decoder = payload.get("decoder") or {}
+    return {
+        "brand": _extract_provider_value(decoder, "make"),
+        "model": _extract_provider_value(decoder, "model"),
+        "year": _normalize_year(_extract_provider_value(decoder, "model_year")),
+        "engine": (
+            _extract_provider_value(decoder, "engine_code")
+            or _extract_provider_value(decoder, "engine")
+            or _extract_provider_value(decoder, "engine_model")
+        ),
+        "fuel": _extract_provider_value(decoder, "fuel_type"),
+        "fuel_type": _extract_provider_value(decoder, "fuel_type"),
+        "transmission": (
+            _extract_provider_value(decoder, "transmission")
+            or _extract_provider_value(decoder, "gearbox")
+        ),
+        "drive": (
+            _extract_provider_value(decoder, "drive_type")
+            or _extract_provider_value(decoder, "driven_axle")
+        ),
+        "displacement": (
+            _extract_provider_value(decoder, "engine_displ_l")
+            or _extract_provider_value(decoder, "engine_displ_cm3")
+        ),
+        "power": (
+            _extract_provider_value(decoder, "engine_power_hp")
+            or _extract_provider_value(decoder, "engine_power_kw")
+        ),
+        "torque": _extract_provider_value(decoder, "engine_torque_nm"),
+        "engine_type": (
+            _extract_provider_value(decoder, "engine_type")
+            or _extract_provider_value(decoder, "body")
+        ),
+        "cylinders": _extract_provider_value(decoder, "engine_cylinders"),
+        "emissions": _extract_provider_value(decoder, "emission_standard"),
+        "tank": _extract_provider_value(decoder, "fuel_tank_capacity"),
+        "photo_query": " ".join(
+            part
+            for part in (
+                _extract_provider_value(decoder, "make"),
+                _extract_provider_value(decoder, "model"),
+                _extract_provider_value(decoder, "model_year"),
+            )
+            if part
+        ).strip(),
+        "wikipedia_title": "",
+    }
+
+
+def _decode_with_nhtsa(vin: str) -> dict[str, str]:
+    url = (
+        "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/"
+        f"{urllib.parse.quote(vin)}?format=json"
+    )
+    payload = _fetch_json(url)
+    results = payload.get("Results") or []
+    if not isinstance(results, list) or not results:
+        return {}
+    record = results[0] or {}
+    if not isinstance(record, dict):
+        return {}
+    return {
+        "brand": _clean_text(record.get("Make") or record.get("Manufacturer") or record.get("ManufacturerName")),
+        "model": _clean_text(record.get("Model") or record.get("Series") or record.get("Trim")),
+        "year": _normalize_year(record.get("ModelYear")),
+        "engine": "",
+        "fuel": "",
+        "fuel_type": "",
+        "transmission": "",
+        "drive": "",
+        "displacement": "",
+        "power": "",
+        "torque": "",
+        "engine_type": "",
+        "cylinders": "",
+        "emissions": "",
+        "tank": "",
+        "photo_query": " ".join(
+            part for part in (
+                _clean_text(record.get("Make") or record.get("ManufacturerName")),
+                _clean_text(record.get("Model") or record.get("Series") or record.get("Trim")),
+                _normalize_year(record.get("ModelYear")),
+            ) if part
+        ).strip(),
+        "wikipedia_title": "",
+    }
+
+
 def _run_model_enrichment(vehicle: dict[str, str]) -> dict[str, str]:
     if not is_configured():
         return {}
@@ -305,10 +484,70 @@ def _run_model_enrichment(vehicle: dict[str, str]) -> dict[str, str]:
     }
 
 
+def _known_jdm_chassis_profile(chassis_code: str) -> dict[str, str]:
+    return dict(KNOWN_JDM_CHASSIS_PROFILES.get(_clean_text(chassis_code).upper(), {}))
+
+
+def decode_vehicle_profile(payload: dict[str, Any]) -> dict[str, str]:
+    vehicle = _normalize_vehicle_payload(payload)
+    identifier = vehicle.get("vin", "")
+    identifier_type = _classify_vehicle_identifier(identifier)
+    chassis_code, _ = _extract_jdm_chassis_parts(identifier)
+
+    decoded: dict[str, str] = {}
+    if identifier_type == "vin":
+        try:
+            decoded = _decode_with_vindecoder(identifier)
+        except Exception:
+            decoded = {}
+        if not decoded.get("brand") or not decoded.get("model"):
+            try:
+                decoded = _decode_with_nhtsa(identifier)
+            except Exception:
+                decoded = decoded or {}
+    elif identifier_type == "jdm_chassis":
+        decoded = _known_jdm_chassis_profile(chassis_code)
+
+    merged = dict(vehicle)
+    for key in (
+        "brand",
+        "model",
+        "year",
+        "engine",
+        "fuel",
+        "fuel_type",
+        "transmission",
+        "drive",
+        "displacement",
+        "power",
+        "torque",
+        "engine_type",
+        "cylinders",
+        "emissions",
+        "tank",
+    ):
+        incoming = _clean_text(decoded.get(key))
+        if incoming:
+            merged[key] = incoming
+
+    if decoded:
+        merged["photo_url"] = _find_vehicle_photo(merged, decoded)
+    return merged
+
+
 def enrich_vehicle_profile(payload: dict[str, Any]) -> dict[str, str]:
     vehicle = _normalize_vehicle_payload(payload)
     identifier_type = _classify_vehicle_identifier(vehicle.get("vin", ""))
     chassis_code, _ = _extract_jdm_chassis_parts(vehicle.get("vin", ""))
+
+    known_profile = _known_jdm_chassis_profile(chassis_code)
+    if identifier_type == "jdm_chassis" and known_profile:
+        merged = dict(vehicle)
+        for key, value in known_profile.items():
+            if value:
+                merged[key] = value
+        merged["photo_url"] = _find_vehicle_photo(merged, known_profile)
+        return merged
 
     try:
         enrichment = _run_model_enrichment(vehicle)
