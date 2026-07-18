@@ -859,13 +859,9 @@ const SPLINE_SCENE_URL = "";
 
     function isJdmChassisNumber(value) {
       const normalized = normalizeVehicleIdentifier(value);
-      if (!normalized || isFullVin(normalized)) return false;
+      if (!normalized || isFullVin(normalized) || !normalized.includes("-")) return false;
       if (normalized.length < 8 || normalized.length > 18) return false;
-      if (!/^[A-Z0-9-]+$/.test(normalized)) return false;
-      if (normalized.includes("-")) {
-        return /-\d[A-Z0-9]{3,}$/i.test(normalized);
-      }
-      return /^[A-Z]{2,5}\d{2,7}[A-Z]?\d{4,8}$/i.test(normalized);
+      return /^[A-Z0-9-]+$/.test(normalized) && /-\d[A-Z0-9]{3,}$/i.test(normalized);
     }
 
     function isSupportedVehicleIdentifier(value) {
