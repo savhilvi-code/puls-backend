@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -10,8 +11,13 @@ from app.services.openai_service import OpenAIRouterUnavailableError, get_openai
 
 CURRENT_YEAR_MAX = 2027
 WIKIPEDIA_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0"}
+JSON_API_HEADERS = {"User-Agent": "PULS-CarDiagnostic/1.0", "Accept": "application/json"}
 FULL_VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 JDM_CHASSIS_PATTERN = re.compile(r"^[A-Z0-9-]{8,18}$", re.IGNORECASE)
+JDM_CHASSIS_COMPACT_PATTERN = re.compile(r"^(?:[A-Z]{2,5}\d{5,10}|[A-Z]{2,7}[A-Z]?\d{4,8})$", re.IGNORECASE)
+JDM_CHASSIS_PARTS_PATTERN = re.compile(r"^([A-Z]{2,7}[A-Z]?)-?(\d{4,8})$", re.IGNORECASE)
+CARJAM_API_BASE_URL = os.getenv("CARJAM_API_BASE_URL", "https://www.carjam.co.nz").rstrip("/")
+CARJAM_API_KEY = os.getenv("CARJAM_API_KEY", "").strip()
 
 VEHICLE_ENRICHMENT_SCHEMA = {
     "type": "object",
@@ -129,9 +135,26 @@ def _classify_vehicle_identifier(value: str) -> str:
         return ""
     if FULL_VIN_PATTERN.fullmatch(normalized):
         return "vin"
-    if "-" in normalized and JDM_CHASSIS_PATTERN.fullmatch(normalized):
+    if JDM_CHASSIS_PATTERN.fullmatch(normalized) and ("-" in normalized or JDM_CHASSIS_COMPACT_PATTERN.fullmatch(normalized)):
         return "jdm_chassis"
     return "generic"
+
+
+def _extract_jdm_chassis_parts(value: str) -> tuple[str, str]:
+    normalized = _clean_text(value).upper()
+    compact = normalized.replace("-", "")
+    match = JDM_CHASSIS_PARTS_PATTERN.fullmatch(normalized) or JDM_CHASSIS_PARTS_PATTERN.fullmatch(compact)
+    if not match:
+        return "", ""
+    return str(match.group(1) or "").upper(), str(match.group(2) or "").upper()
+
+
+def _normalize_jdm_chassis(value: str) -> str:
+    normalized = _clean_text(value).upper()
+    code, serial = _extract_jdm_chassis_parts(normalized)
+    if code and serial:
+        return f"{code}-{serial}"
+    return normalized
 
 
 def _build_enrichment_input(vehicle: dict[str, str]) -> str:
@@ -212,6 +235,87 @@ def _search_commons_image(query: str) -> str:
     return ""
 
 
+def _fetch_json(url: str) -> Any:
+    request = urllib.request.Request(url, headers=JSON_API_HEADERS)
+    with urllib.request.urlopen(request, timeout=18) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _map_carjam_transmission(value: str) -> str:
+    normalized = _clean_text(value).upper()
+    mapping = {
+        "ATM": "Automatic",
+        "MAN": "Manual",
+        "CVT": "CVT",
+    }
+    return mapping.get(normalized, _clean_text(value))
+
+
+def _map_carjam_drive(value: str) -> str:
+    normalized = _clean_text(value).upper()
+    mapping = {
+        "FF": "FWD",
+        "FR": "RWD",
+        "4WD": "4WD",
+        "AWD": "AWD",
+    }
+    return mapping.get(normalized, _clean_text(value))
+
+
+def _lookup_carjam_jdm_chassis(chassis: str) -> dict[str, str]:
+    if not CARJAM_API_KEY:
+        return {}
+
+    normalized = _normalize_jdm_chassis(chassis)
+    if not normalized:
+        return {}
+
+    params = urllib.parse.urlencode(
+        {
+            "key": CARJAM_API_KEY,
+            "chassis": normalized,
+            "f": "json",
+        }
+    )
+    url = f"{CARJAM_API_BASE_URL}/a/vehicle:japan_lookup?{params}"
+    payload = _fetch_json(url)
+    if not isinstance(payload, dict):
+        return {}
+    cars = payload.get("cars")
+    if not isinstance(cars, list) or not cars:
+        return {}
+    car = cars[0] or {}
+    if not isinstance(car, dict):
+        return {}
+
+    manufacture_date = _clean_text(car.get("manufacture_date"))
+    year = _normalize_year(manufacture_date.split("-")[0] if manufacture_date else "")
+    make = _clean_text(car.get("make"))
+    model = _clean_text(car.get("model"))
+    grade = _clean_text(car.get("grade"))
+    body = _clean_text(car.get("body"))
+    photo_query = " ".join(part for part in (make, model, grade or body) if part).strip()
+    return {
+        "brand": make.title() if make else "",
+        "model": " ".join(part for part in (model.title() if model else "", grade) if part).strip(),
+        "year": year,
+        "engine": _clean_text(car.get("engine")),
+        "fuel": "",
+        "fuel_type": "",
+        "transmission": _map_carjam_transmission(car.get("transmission")),
+        "drive": _map_carjam_drive(car.get("drive")),
+        "displacement": "",
+        "power": "",
+        "torque": "",
+        "engine_type": "",
+        "cylinders": "",
+        "emissions": "",
+        "tank": "",
+        "photo_query": photo_query,
+        "wikipedia_title": "",
+    }
+
+
 def _find_vehicle_photo(vehicle: dict[str, str], enrichment: dict[str, str]) -> str:
     if vehicle.get("photo_url"):
         return vehicle["photo_url"]
@@ -287,6 +391,37 @@ def _run_model_enrichment(vehicle: dict[str, str]) -> dict[str, str]:
 
 def enrich_vehicle_profile(payload: dict[str, Any]) -> dict[str, str]:
     vehicle = _normalize_vehicle_payload(payload)
+    identifier_type = _classify_vehicle_identifier(vehicle.get("vin", ""))
+
+    if identifier_type == "jdm_chassis":
+        try:
+            enrichment = _lookup_carjam_jdm_chassis(vehicle.get("vin", ""))
+        except Exception:
+            enrichment = {}
+        if enrichment:
+            merged = dict(vehicle)
+            for key in (
+                "brand",
+                "model",
+                "year",
+                "engine",
+                "fuel",
+                "fuel_type",
+                "transmission",
+                "drive",
+                "displacement",
+                "power",
+                "torque",
+                "engine_type",
+                "cylinders",
+                "emissions",
+                "tank",
+            ):
+                incoming = _clean_text(enrichment.get(key))
+                if incoming:
+                    merged[key] = incoming
+            merged["photo_url"] = _find_vehicle_photo(merged, enrichment)
+            return merged
 
     try:
         enrichment = _run_model_enrichment(vehicle)

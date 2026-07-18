@@ -9,12 +9,10 @@ from pydantic import BaseModel, ConfigDict
 from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError, find_user_by_fields, get_user_by_id
 from app.services.puls_data_service import delete_user_vehicle, list_user_vehicles, save_user_vehicle
 from app.services.vehicle_enrichment_service import enrich_vehicle_profile
-from app.services.vehicle_lookup_service import VehicleLookupResult, vehicle_lookup_service
 
 router = APIRouter(prefix="/api/vehicles", tags=["vehicles"])
 
 VEHICLE_SPEC_NOTE_KEY = "_puls_vehicle_meta"
-VEHICLE_LOOKUP_NOTE_KEY = "_puls_vehicle_lookup"
 VEHICLE_SPEC_FIELDS = (
     "displacement",
     "power",
@@ -23,17 +21,6 @@ VEHICLE_SPEC_FIELDS = (
     "cylinders",
     "emissions",
     "tank",
-)
-VEHICLE_LOOKUP_FIELDS = (
-    "raw_identifier",
-    "normalized_identifier",
-    "identifier_type",
-    "chassis_code",
-    "market",
-    "lookup_status",
-    "lookup_source",
-    "lookup_confidence",
-    "year_range",
 )
 VEHICLE_PRIMARY_IDENTITY_FIELDS = ("brand", "model", "year", "engine")
 
@@ -66,16 +53,6 @@ class VehiclePayload(BaseModel):
     country: str = ""
     city: str = ""
     notes: str = ""
-    raw_identifier: str = ""
-    normalized_identifier: str = ""
-    identifier_type: str = ""
-    chassis_code: str = ""
-    market: str = ""
-    lookup_status: str = ""
-    lookup_source: str = ""
-    lookup_confidence: float | str | None = None
-    year_range: str = ""
-    user_confirmed: bool | None = None
 
 
 def _safe_int(value: int | str | None) -> int | None:
@@ -170,54 +147,39 @@ def _resolve_user_id(*, user_id: int | None, auth_user_id: str = "", email: str 
     raise HTTPException(status_code=404, detail="User profile not found.")
 
 
-def _extract_vehicle_meta(notes: Any) -> tuple[dict[str, Any], dict[str, Any], str]:
+def _extract_vehicle_meta(notes: Any) -> tuple[dict[str, Any], str]:
     raw_notes = str(notes or "").strip()
     if not raw_notes:
-        return {}, {}, ""
+        return {}, ""
     try:
         parsed = json.loads(raw_notes)
     except Exception:
-        return {}, {}, raw_notes
+        return {}, raw_notes
     if not isinstance(parsed, dict):
-        return {}, {}, raw_notes
-    spec_meta = parsed.get(VEHICLE_SPEC_NOTE_KEY)
-    if not isinstance(spec_meta, dict):
-        spec_meta = {}
-    lookup_meta = parsed.get(VEHICLE_LOOKUP_NOTE_KEY)
-    if not isinstance(lookup_meta, dict):
-        lookup_meta = {}
-    manual_note = str(spec_meta.get("manual_note") or "").strip()
-    return spec_meta, lookup_meta, manual_note
+        return {}, raw_notes
+    meta = parsed.get(VEHICLE_SPEC_NOTE_KEY)
+    if not isinstance(meta, dict):
+        return {}, raw_notes
+    manual_note = str(meta.get("manual_note") or "").strip()
+    return meta, manual_note
 
 
 def _pack_vehicle_notes(*, raw_notes: str, payload: VehiclePayload) -> str:
     manual_note = raw_notes.strip()
-    spec_meta: dict[str, str] = {}
+    meta: dict[str, str] = {}
     for field in VEHICLE_SPEC_FIELDS:
         value = str(getattr(payload, field, "") or "").strip()
         if value:
-          spec_meta[field] = value
-    lookup_meta: dict[str, Any] = {}
-    for field in VEHICLE_LOOKUP_FIELDS:
-        value = getattr(payload, field, "")
-        if value not in (None, ""):
-            lookup_meta[field] = value
-    if payload.user_confirmed is not None:
-        lookup_meta["user_confirmed"] = bool(payload.user_confirmed)
+          meta[field] = value
     if manual_note:
-        spec_meta["manual_note"] = manual_note
-    envelope: dict[str, Any] = {}
-    if spec_meta:
-        envelope[VEHICLE_SPEC_NOTE_KEY] = spec_meta
-    if lookup_meta:
-        envelope[VEHICLE_LOOKUP_NOTE_KEY] = lookup_meta
-    if not envelope:
+        meta["manual_note"] = manual_note
+    if not meta:
         return manual_note
-    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps({VEHICLE_SPEC_NOTE_KEY: meta}, ensure_ascii=False, separators=(",", ":"))
 
 
 def _vehicle_response(row: dict[str, Any]) -> dict[str, Any]:
-    meta, lookup_meta, manual_note = _extract_vehicle_meta(row.get("notes"))
+    meta, manual_note = _extract_vehicle_meta(row.get("notes"))
     return {
         "id": row.get("id"),
         "user_id": row.get("user_id"),
@@ -243,16 +205,6 @@ def _vehicle_response(row: dict[str, Any]) -> dict[str, Any]:
         "country": row.get("country") or "",
         "city": row.get("city") or "",
         "notes": manual_note,
-        "raw_identifier": lookup_meta.get("raw_identifier") or "",
-        "normalized_identifier": lookup_meta.get("normalized_identifier") or "",
-        "identifier_type": lookup_meta.get("identifier_type") or "",
-        "chassis_code": lookup_meta.get("chassis_code") or "",
-        "market": row.get("market") or lookup_meta.get("market") or "",
-        "lookup_status": lookup_meta.get("lookup_status") or "",
-        "lookup_source": lookup_meta.get("lookup_source") or "",
-        "lookup_confidence": lookup_meta.get("lookup_confidence") or "",
-        "year_range": lookup_meta.get("year_range") or "",
-        "user_confirmed": bool(lookup_meta.get("user_confirmed")),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -305,36 +257,7 @@ def _draft_vehicle_response(data: dict[str, Any]) -> dict[str, Any]:
         "country": data.get("country") or "",
         "city": data.get("city") or "",
         "notes": data.get("notes") or "",
-        "raw_identifier": data.get("raw_identifier") or "",
-        "normalized_identifier": data.get("normalized_identifier") or "",
-        "identifier_type": data.get("identifier_type") or "",
-        "chassis_code": data.get("chassis_code") or "",
-        "market": data.get("market") or "",
-        "lookup_status": data.get("lookup_status") or "",
-        "lookup_source": data.get("lookup_source") or "",
-        "lookup_confidence": data.get("lookup_confidence") or "",
-        "year_range": data.get("year_range") or "",
-        "user_confirmed": bool(data.get("user_confirmed")),
     }
-
-
-def _lookup_result_to_draft(result: VehicleLookupResult) -> dict[str, Any]:
-    draft = result.to_vehicle_payload()
-    draft.update(
-        {
-            "raw_identifier": result.raw_identifier,
-            "normalized_identifier": result.normalized_identifier,
-            "identifier_type": result.identifier_type,
-            "chassis_code": result.chassis_code or "",
-            "market": result.market or "",
-            "lookup_status": result.status,
-            "lookup_source": result.source,
-            "lookup_confidence": result.confidence,
-            "year_range": result.year_range or "",
-            "user_confirmed": False,
-        }
-    )
-    return draft
 
 
 @router.get("")
@@ -377,20 +300,6 @@ async def enrich_vehicle(payload: VehiclePayload) -> dict[str, Any]:
     try:
         enriched = enrich_vehicle_profile(payload.model_dump())
         return {"vehicle": _draft_vehicle_response(enriched)}
-    except HTTPException:
-        raise
-    except (SupabaseUnavailableError, SupabaseOperationError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@router.post("/lookup")
-async def lookup_vehicle(payload: VehiclePayload) -> dict[str, Any]:
-    try:
-        result = await vehicle_lookup_service.lookup(payload.vin)
-        return {
-            "result": result.model_dump(),
-            "vehicle": _draft_vehicle_response(_lookup_result_to_draft(result)),
-        }
     except HTTPException:
         raise
     except (SupabaseUnavailableError, SupabaseOperationError) as exc:
