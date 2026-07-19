@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.database.supabase import get_supabase_client
-from app.services.puls_data_service import extract_videos
+from app.services.link_service import extract_videos
 
 
 def save_media_files(

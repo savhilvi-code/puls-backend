@@ -179,7 +179,7 @@ PULS backend - FastAPI-сервис для автомобильной диагн
 - `app/routers/vehicles.py`: `/api/vehicles` CRUD for user-owned vehicle cards. Deleting a user vehicle removes the personal card and vehicle service logs, while solved diagnostic cases keep a brand/model/year/engine snapshot for the shared knowledge base.
 - `app/routers/vehicles.py`: `/api/vehicles` also round-trips editable technical spec fields (`displacement`, `power`, `torque`, `engine_type`, `cylinders`, `emissions`, `tank`). For simpler live debugging these values are persisted safely through the existing `vehicles.notes` metadata envelope even before the optional explicit SQL columns are applied.
 - `app/services/vehicle_enrichment_service.py`: JDM chassis enrichment now supports an additional local fallback provider backed by `data/jdm_chassis_codes.json` before falling through to external provider/API or model-based research.
-- `db/puls_supabase_alignment.sql`: core runtime alignment for `subscriptions`, `payments`, `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `user_feedback`, `solved_cases`, `vehicle_service_logs` and `media_files`
+- `db/puls_production_schema.sql`: canonical production schema for `users`, `subscriptions`, `payments`, `vehicles`, `conversations`, `messages`, `diagnostic_requests`, `parser_runs`, `user_feedback`, `solved_cases`, `knowledge_cases`, `video_library`, `vehicle_service_logs`, `media_files` and related indexes
 - Telegram transport removed: backend is web/API-only.
 
 ## Supabase Runtime Requirements

@@ -21,13 +21,13 @@ from app.services.diagnostic_service import (
     update_diagnostic_request,
 )
 from app.services.feedback_service import create_feedback
+from app.services.link_service import extract_videos
 from app.services.media_service import save_media_files
 from app.services.parser_run_service import create_parser_run
 from app.services.puls_data_service import (
     classify_feedback,
     create_solved_case,
     create_solved_case_from_diagnostic,
-    extract_videos,
 )
 from app.services.kb_service import save_confirmed_case_to_knowledge
 from app.services.subscription_service import (
