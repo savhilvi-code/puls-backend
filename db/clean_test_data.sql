@@ -42,9 +42,6 @@ delete from public.media_files
 where user_id in (select id from public.users)
    or request_id in (select id from public.diagnostic_requests);
 
-delete from public.service_history
-where vehicle_id in (select id from public.vehicles);
-
 delete from public.diagnostic_requests
 where user_id in (select id from public.users);
 
@@ -102,7 +99,6 @@ union all select 'user_sessions', count(*) from public.user_sessions
 union all select 'subscriptions', count(*) from public.subscriptions
 union all select 'payments', count(*) from public.payments
 union all select 'media_files', count(*) from public.media_files
-union all select 'service_history', count(*) from public.service_history
 order by table_name;
 
 -- Verification: orphan checks for user/vehicle/conversation/request links.
