@@ -159,6 +159,18 @@ def _extract_active_car_from_text(text: str) -> str:
     return result
 
 
+def _resolve_dialog_vehicle_binding(*, user_id: int | None, car_text: str) -> tuple[int | None, str]:
+    if user_id is None or not str(car_text or "").strip():
+        return None, ""
+    dialog_vehicle = resolve_user_vehicle(
+        user_id=user_id,
+        car_text=car_text,
+    )
+    dialog_vehicle_label = _vehicle_label(dialog_vehicle)
+    dialog_vehicle_id = dialog_vehicle.get("id") if dialog_vehicle else None
+    return dialog_vehicle_id, dialog_vehicle_label
+
+
 def _looks_like_generic_component_query(text: str, active_car: str = "") -> bool:
     if active_car:
         return False
@@ -589,6 +601,8 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
     latest_context = get_latest_conversation_context(user_id=user.id)
+    service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
+    service_seed_car = _extract_active_car_from_text(service_seed_query)
     if mentioned_car:
         state.active_car = mentioned_car
     elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
@@ -686,11 +700,14 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         and not state.is_feedback_not_helped
     ):
         effective_car = (
-            state.active_car
+            service_seed_car
+            or state.active_car
             or str(latest_context.get("active_car") or "").strip()
             or normalized.car_info
             or user.car_info
         )
+        if effective_car:
+            state.active_car = effective_car
         answer_text = _service_target_followup_response(
             language=state.language,
             active_car=effective_car,
@@ -727,7 +744,6 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
-    service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
     service_detail_context = bool(
         service_seed_query
         and _looks_like_service_detail_prompt(str(latest_context.get("last_assistant_text") or ""))
@@ -739,7 +755,19 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         state.needs_problem_clarification = False
         state.should_search = True
         state.current_symptom = service_seed_query
-        if not state.active_car:
+        if service_seed_car:
+            state.active_car = service_seed_car
+            dialog_vehicle_id, dialog_vehicle_label = _resolve_dialog_vehicle_binding(
+                user_id=user.id,
+                car_text=service_seed_car,
+            )
+            if dialog_vehicle_label:
+                vehicle_id = dialog_vehicle_id
+                normalized = normalized.model_copy(update={"car_info": dialog_vehicle_label})
+                state.active_car = dialog_vehicle_label
+            else:
+                vehicle_id = None
+        elif not state.active_car:
             state.active_car = str(latest_context.get("active_car") or "").strip()
 
     if state.needs_problem_clarification:
