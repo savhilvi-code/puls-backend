@@ -232,6 +232,74 @@ def _looks_like_info_followup(text: str) -> bool:
     return any(phrase in lowered for phrase in phrases)
 
 
+def _looks_like_service_advice_query(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    service_terms = (
+        "какое масло",
+        "какое масло подходит",
+        "какое масло лить",
+        "какое масло залить",
+        "какую жидкость",
+        "какую охлаждающую жидкость",
+        "какой антифриз",
+        "какой atf",
+        "какое трансмиссионное масло",
+        "какую вязкость",
+        "какой допуск масла",
+        "what oil",
+        "which oil",
+        "oil recommendation",
+        "oil spec",
+        "oil viscosity",
+        "coolant",
+        "antifreeze",
+        "transmission fluid",
+        "atf",
+        "brake fluid",
+        "power steering fluid",
+    )
+    problem_terms = (
+        "не работает",
+        "не завод",
+        "плохо",
+        "стучит",
+        "свист",
+        "дым",
+        "ошибк",
+        "теряет тягу",
+        "loss of power",
+        "stall",
+        "noise",
+        "turbo",
+    )
+    return any(term in lowered for term in service_terms) and not any(term in lowered for term in problem_terms)
+
+
+def _service_advice_clarification(*, language: str, active_car: str) -> str:
+    if language == "ru":
+        if active_car:
+            return (
+                f"Уточните, пожалуйста, для какого узла на {active_car} нужно подобрать жидкость: "
+                "двигатель, АКПП/вариатор, раздатка, редуктор, ГУР или тормозная система. "
+                "Если знаете, напишите желаемую вязкость или допуск из мануала."
+            )
+        return (
+            "Уточните, пожалуйста, для какого узла нужно подобрать жидкость: "
+            "двигатель, АКПП/вариатор, раздатка, редуктор, ГУР или тормозная система. "
+            "И напишите марку, модель, год и двигатель автомобиля."
+        )
+    if active_car:
+        return (
+            f"Please specify which system on your {active_car} needs fluid selection: "
+            "engine, automatic transmission/CVT, transfer case, differential, power steering, or brakes. "
+            "If you know it, include the target viscosity or OEM specification."
+        )
+    return (
+        "Please specify which system needs fluid selection: engine, automatic transmission/CVT, "
+        "transfer case, differential, power steering, or brakes. Also include the car make, model, year, and engine."
+    )
+
+
 def _extract_last_search_symptom(history: str) -> str:
     blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
     for block in reversed(blocks):
@@ -475,6 +543,24 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
 
     if state.needs_car_clarification:
         answer_text = _clarification_text(state.language)
+        await update_user_after_response(
+            user,
+            normalized,
+            answer_text,
+            should_decrease_limit=False,
+            active_car=state.active_car,
+            symptom=state.current_symptom,
+            message_type="clarification",
+            vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
+        )
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
+
+    if _looks_like_service_advice_query(normalized.text) and not state.is_feedback_helped and not state.is_feedback_not_helped:
+        answer_text = _service_advice_clarification(
+            language=state.language,
+            active_car=state.active_car,
+        )
         await update_user_after_response(
             user,
             normalized,
