@@ -208,6 +208,7 @@ flowchart LR
 - `/chat` receives the active frontend car as `car_info`; Decision Engine first tries to resolve it to the user's `vehicles.id`.
 - If the user explicitly mentions another car, the mentioned car overrides the previous active context. If it is not in `vehicles`, it remains a dialog context without creating a personal vehicle row.
 - Feedback and follow-up messages reuse the last diagnostic vehicle context. They must not silently rebind to the saved profile car if the solved/requested car was different.
+- Active service/consumable dialogs (oil, ATF, coolant, brake fluid, steering fluid) are tracked inside the backend chat state machine. Short clarification replies must keep the original service seed query, vehicle, service target, and subtype until the service flow is finished, and must not fall through into unrelated generic diagnostic fallback.
 - Knowledge lookup is vehicle-aware: a case for Nissan/SR20VET must not satisfy a Toyota/1G-GZE request.
 - Knowledge lookup checks both `knowledge_cases` and confirmed `solved_cases` before Parser/Deep Search starts.
 - Parser history context is filtered by the active vehicle before it is passed to Parser/Deep Search, preventing old-car contamination.
