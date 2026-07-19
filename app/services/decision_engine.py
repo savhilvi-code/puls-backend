@@ -317,7 +317,20 @@ def _extract_service_target_reply(text: str) -> str:
     lowered = _normalize_phrase(text)
     target_map = {
         "engine": ("для двс", "двс", "двигатель", "для двигателя", "в двигатель", "engine", "motor"),
-        "transmission": ("акпп", "вариатор", "cvt", "atf", "коробка", "трансмиссия", "transmission"),
+        "transmission": (
+            "акпп",
+            "вариатор",
+            "cvt",
+            "atf",
+            "коробка",
+            "трансмиссия",
+            "автомат",
+            "автоматическая",
+            "гидромеханическая",
+            "automatic",
+            "gearbox",
+            "transmission",
+        ),
         "transfer_case": ("раздатка", "transfer case"),
         "differential": ("редуктор", "дифф", "differential"),
         "power_steering": ("гур", "power steering", "steering fluid"),
@@ -337,6 +350,43 @@ def _looks_like_service_clarification_prompt(text: str) -> bool:
         or "needs fluid selection" in lowered
         or "нужно подобрать жидкость" in lowered
     )
+
+
+def _extract_service_target_from_prompt(text: str) -> str:
+    lowered = _normalize_phrase(text)
+    prompt_map = {
+        "engine": ("речь про двигатель", "this is for the engine"),
+        "transmission": ("речь про акпп/вариатор", "automatic transmission/cvt", "which gearbox is installed"),
+        "transfer_case": ("речь про раздатку", "this is for the transfer case"),
+        "differential": ("речь про редуктор", "this is for the differential"),
+        "power_steering": ("речь про гур", "power steering system"),
+        "brakes": ("речь про тормозную систему", "brake system"),
+    }
+    for target, phrases in prompt_map.items():
+        if any(phrase in lowered for phrase in phrases):
+            return target
+    return ""
+
+
+def _extract_service_transmission_kind(text: str) -> str:
+    lowered = _normalize_phrase(text)
+    if any(phrase in lowered for phrase in ("вариатор", "cvt")):
+        return "cvt"
+    if any(
+        phrase in lowered
+        for phrase in (
+            "обычный автомат",
+            "обычный atf",
+            "обычный автоматический",
+            "гидромеханический",
+            "автомат",
+            "automatic",
+            "regular atf",
+            "normal atf",
+        )
+    ):
+        return "automatic"
+    return ""
 
 
 def _service_target_followup_response(*, language: str, active_car: str, target: str) -> str:
@@ -404,7 +454,60 @@ def _looks_like_service_detail_prompt(text: str) -> bool:
     )
 
 
-def _prepend_service_brief(*, answer_text: str, language: str, active_car: str, symptom: str) -> str:
+def _build_service_parser_query(
+    *,
+    language: str,
+    seed_query: str,
+    assistant_prompt: str,
+    user_reply: str,
+    service_target: str,
+) -> str:
+    prompt_text = str(assistant_prompt or "")
+    reply_text = str(user_reply or "").strip()
+    base_query = str(seed_query or "").strip()
+    if not reply_text:
+        return base_query
+
+    transmission_kind = _extract_service_transmission_kind(reply_text)
+
+    if language == "ru":
+        if service_target == "transmission":
+            if transmission_kind == "automatic":
+                return (
+                    f"{base_query}. Уточнение пользователя: речь про АКПП, обычный автомат, нужен обычный ATF, не вариатор. "
+                    f"Дополнительные условия пользователя: {reply_text}."
+                )
+            if transmission_kind == "cvt":
+                return (
+                    f"{base_query}. Уточнение пользователя: речь про вариатор, нужна жидкость CVT, не обычный ATF. "
+                    f"Дополнительные условия пользователя: {reply_text}."
+                )
+            return (
+                f"{base_query}. Уточнение пользователя: речь про АКПП/трансмиссию. "
+                f"Дополнительные условия пользователя: {reply_text}."
+            )
+        if service_target == "engine" and "климат эксплуатации" in _normalize_phrase(prompt_text):
+            return f"{base_query}. Условия эксплуатации пользователя: {reply_text}."
+        return f"{base_query}. Дополнительные условия пользователя: {reply_text}."
+
+    if service_target == "transmission":
+        if transmission_kind == "automatic":
+            return (
+                f"{base_query}. User clarification: this is for a regular automatic transmission, regular ATF, not a CVT. "
+                f"Additional user details: {reply_text}."
+            )
+        if transmission_kind == "cvt":
+            return (
+                f"{base_query}. User clarification: this is for a CVT and requires CVT fluid, not regular ATF. "
+                f"Additional user details: {reply_text}."
+            )
+        return f"{base_query}. User clarification: this is for the transmission. Additional user details: {reply_text}."
+    if service_target == "engine" and "climate" in _normalize_phrase(prompt_text):
+        return f"{base_query}. User operating climate: {reply_text}."
+    return f"{base_query}. Additional user details: {reply_text}."
+
+
+def _prepend_service_brief(*, answer_text: str, language: str, active_car: str, symptom: str, service_target: str = "") -> str:
     text = str(answer_text or "").strip()
     if not text:
         return text
@@ -415,19 +518,36 @@ def _prepend_service_brief(*, answer_text: str, language: str, active_car: str, 
     viscosity_match = re.search(r"\b\d{1,2}w-\d{2}\b", text, re.IGNORECASE)
     volume_match = re.search(r"\b\d+(?:[.,]\d+)?\s*л\b", text, re.IGNORECASE)
 
-    if language == "ru":
-        oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "подходящую вязкость по мануалу"
-        volume_phrase = f", объем примерно {volume_match.group(0)}" if volume_match else ""
-        car_phrase = f" для {active_car}" if active_car else ""
-        brief = f"Коротко: в двигатель{car_phrase} лучше заливать синтетическое масло {oil_phrase}{volume_phrase}."
-    else:
-        oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "the OEM-recommended viscosity"
-        volume_phrase = f", roughly {volume_match.group(0)}" if volume_match else ""
-        car_phrase = f" for {active_car}" if active_car else ""
-        brief = f"Briefly: use a full-synthetic engine oil in {oil_phrase}{volume_phrase}{car_phrase}."
-
     if not _looks_like_service_advice_query(symptom):
         return text
+
+    if language == "ru":
+        car_phrase = f" для {active_car}" if active_car else ""
+        if service_target == "transmission":
+            if any(term in lowered for term in ("вариатор", "cvt")):
+                brief = f"Коротко: в АКПП/вариатор{car_phrase} нужна жидкость CVT по заводскому допуску."
+            else:
+                brief = f"Коротко: в АКПП{car_phrase} нужен обычный ATF по заводскому допуску."
+        elif service_target == "engine":
+            oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "подходящую вязкость по мануалу"
+            volume_phrase = f", объем примерно {volume_match.group(0)}" if volume_match else ""
+            brief = f"Коротко: в двигатель{car_phrase} лучше заливать синтетическое масло {oil_phrase}{volume_phrase}."
+        else:
+            brief = f"Коротко: для подбора жидкости{car_phrase} ориентируйтесь на заводской допуск и тип узла."
+    else:
+        car_phrase = f" for {active_car}" if active_car else ""
+        if service_target == "transmission":
+            if any(term in lowered for term in ("вариатор", "cvt")):
+                brief = f"Briefly: the transmission{car_phrase} needs OEM-spec CVT fluid."
+            else:
+                brief = f"Briefly: the automatic transmission{car_phrase} needs OEM-spec regular ATF."
+        elif service_target == "engine":
+            oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "the OEM-recommended viscosity"
+            volume_phrase = f", roughly {volume_match.group(0)}" if volume_match else ""
+            brief = f"Briefly: use a full-synthetic engine oil in {oil_phrase}{volume_phrase}{car_phrase}."
+        else:
+            brief = f"Briefly: match the fluid to the exact system{car_phrase} and OEM approval."
+
     return f"{brief}\n\n{text}"
 
 
@@ -514,7 +634,40 @@ def _should_force_parser(text: str) -> bool:
     return any(token in lowered for token in parser_triggers) or len(lowered.split()) >= 4
 
 
-def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str) -> str:
+def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str, service_target: str = "") -> str:
+    if _looks_like_service_advice_query(symptom):
+        if language == "ru":
+            car_phrase = f" для {active_car}" if active_car else ""
+            if service_target == "transmission":
+                return (
+                    f"Для точного подбора жидкости в АКПП{car_phrase} нужно знать точное обозначение коробки и заводской допуск ATF.\n\n"
+                    "Если под рукой нет мануала, пришлите код коробки, шильдик трансмиссии или рынок/год выпуска машины."
+                )
+            if service_target == "engine":
+                return (
+                    f"Для точного подбора моторного масла{car_phrase} нужно знать заводской допуск, климат и желаемый интервал замены.\n\n"
+                    "Если мануала нет, я подберу безопасный диапазон по вязкости и спецификациям."
+                )
+            return (
+                f"Для точного подбора жидкости{car_phrase} нужно знать конкретный узел и заводской допуск.\n\n"
+                "Если мануала нет, пришлите больше данных по машине и типу агрегата."
+            )
+        car_phrase = f" for {active_car}" if active_car else ""
+        if service_target == "transmission":
+            return (
+                f"To choose the correct transmission fluid{car_phrase}, I need the exact gearbox designation and OEM ATF approval.\n\n"
+                "If you do not have the manual, send the gearbox code, transmission tag, or the market/year of the car."
+            )
+        if service_target == "engine":
+            return (
+                f"To choose the correct engine oil{car_phrase}, I need the OEM approval, climate, and service interval.\n\n"
+                "If you do not have the manual, I can still narrow it down to a safe viscosity/specification range."
+            )
+        return (
+            f"To choose the correct fluid{car_phrase}, I need the exact system and OEM approval.\n\n"
+            "If you do not have the manual, send more details about the car and the assembly."
+        )
+
     if language == "ru":
         parts = [
             "Похоже на потерю тяги после прогрева.",
@@ -603,6 +756,14 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     latest_context = get_latest_conversation_context(user_id=user.id)
     service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
     service_seed_car = _extract_active_car_from_text(service_seed_query)
+    latest_assistant_text = str(latest_context.get("last_assistant_text") or "")
+    latest_user_text = str(latest_context.get("last_user_text") or "")
+    service_target = (
+        _extract_service_target_from_prompt(latest_assistant_text)
+        or _extract_service_target_reply(normalized.text)
+        or _extract_service_target_reply(latest_user_text)
+        or _extract_service_target_reply(service_seed_query)
+    )
     if mentioned_car:
         state.active_car = mentioned_car
     elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
@@ -694,8 +855,8 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     if (
         service_target_reply
         and latest_context
-        and _looks_like_service_advice_query(str(latest_context.get("last_user_text") or ""))
-        and _looks_like_service_clarification_prompt(str(latest_context.get("last_assistant_text") or ""))
+        and _looks_like_service_advice_query(latest_user_text)
+        and _looks_like_service_clarification_prompt(latest_assistant_text)
         and not state.is_feedback_helped
         and not state.is_feedback_not_helped
     ):
@@ -719,7 +880,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             answer_text,
             should_decrease_limit=False,
             active_car=effective_car,
-            symptom=str(latest_context.get("last_user_text") or state.current_symptom),
+            symptom=str(latest_user_text or state.current_symptom),
             message_type="clarification",
             vehicle_id=vehicle_id,
             force_new_conversation=bool(mentioned_car),
@@ -746,7 +907,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
 
     service_detail_context = bool(
         service_seed_query
-        and _looks_like_service_detail_prompt(str(latest_context.get("last_assistant_text") or ""))
+        and _looks_like_service_detail_prompt(latest_assistant_text)
         and not state.is_feedback_helped
         and not state.is_feedback_not_helped
     )
@@ -910,7 +1071,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
 
         is_service_detail_turn = bool(
             service_seed_query
-            and _looks_like_service_detail_prompt(str(latest_context.get("last_assistant_text") or ""))
+            and _looks_like_service_detail_prompt(latest_assistant_text)
             and not _looks_like_service_advice_query(normalized.text)
         )
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
@@ -919,10 +1080,13 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
 
         parser_query = effective_symptom
         if is_service_detail_turn and str(normalized.text or "").strip():
-            if state.language == "ru":
-                parser_query = f"{effective_symptom}. Дополнительные условия пользователя: {normalized.text}"
-            else:
-                parser_query = f"{effective_symptom}. Additional user details: {normalized.text}"
+            parser_query = _build_service_parser_query(
+                language=state.language,
+                seed_query=effective_symptom,
+                assistant_prompt=latest_assistant_text,
+                user_reply=normalized.text,
+                service_target=service_target,
+            )
 
         parser_input = normalized.model_copy(update={"text": parser_query})
         try:
@@ -948,6 +1112,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 language=state.language,
                 active_car=state.active_car,
                 symptom=effective_symptom,
+                service_target=service_target,
             )
             answer_text += (
                 "\n\nDid this solve the problem? If not, write 'not helped' and I will run a deeper search."
@@ -1034,6 +1199,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 language=state.language,
                 active_car=state.active_car,
                 symptom=effective_symptom,
+                service_target=service_target,
             )
             answer_text += (
                 "\n\nЭто помогло решить проблему? Если нет - напишите 'не помогло', и я запущу более глубокий поиск."
@@ -1047,6 +1213,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 language=state.language,
                 active_car=state.active_car,
                 symptom=effective_symptom,
+                service_target=service_target,
             )
 
         await update_user_after_response(
@@ -1055,7 +1222,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             answer_text,
             should_decrease_limit=True,
             active_car=state.active_car,
-            symptom=effective_symptom,
+            symptom=parser_query if is_service_detail_turn else effective_symptom,
             message_type="parser",
             links=response_links,
             parser_used=True,
