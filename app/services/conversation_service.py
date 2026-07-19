@@ -26,6 +26,36 @@ def _extract_vehicle_label(text: str) -> str:
     return match.group(0).strip() if match else ""
 
 
+def _normalize_context_text(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _looks_like_service_query(text: str) -> bool:
+    lowered = _normalize_context_text(text)
+    service_terms = (
+        "какое масло",
+        "какое масло подходит",
+        "какое масло лить",
+        "какое масло залить",
+        "какую жидкость",
+        "какой антифриз",
+        "какой atf",
+        "трансмиссионное масло",
+        "вязкость масла",
+        "допуск масла",
+        "what oil",
+        "which oil",
+        "oil recommendation",
+        "oil viscosity",
+        "coolant",
+        "antifreeze",
+        "transmission fluid",
+        "brake fluid",
+        "power steering fluid",
+    )
+    return any(term in lowered for term in service_terms)
+
+
 def _vehicle_label(row: dict | None) -> str:
     row = row or {}
     parts = [row.get("brand"), row.get("model"), row.get("year"), row.get("engine")]
@@ -164,6 +194,7 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
 
     last_assistant_text = ""
     last_user_text = ""
+    latest_service_query = ""
     for index in range(len(message_rows) - 1, -1, -1):
         row = message_rows[index]
         role = str(row.get("role") or "").strip().lower()
@@ -177,6 +208,14 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
                     break
             break
 
+    for row in reversed(message_rows):
+        if str(row.get("role") or "").strip().lower() != "user":
+            continue
+        text = str(row.get("message_text") or "").strip()
+        if text and _looks_like_service_query(text):
+            latest_service_query = text
+            break
+
     vehicle_label = ""
     vehicle_id = conversation.get("vehicle_id")
     if vehicle_id:
@@ -187,6 +226,7 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
         "active_car": vehicle_label,
         "last_user_text": last_user_text,
         "last_assistant_text": last_assistant_text,
+        "latest_service_query": latest_service_query,
     }
 
 

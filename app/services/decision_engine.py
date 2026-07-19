@@ -368,6 +368,57 @@ def _service_target_followup_response(*, language: str, active_car: str, target:
     )
 
 
+def _looks_like_service_detail_prompt(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    return any(
+        phrase in lowered
+        for phrase in (
+            "климат эксплуатации",
+            "желаемую вязкость",
+            "если уже смотрели мануал",
+            "какая именно коробка",
+            "тип привода",
+            "передний или задний редуктор",
+            "нужен именно гидравлический гур",
+            "нужен подбор тормозной жидкости",
+            "preferred viscosity",
+            "checked the manual",
+            "which gearbox is installed",
+            "drivetrain type",
+            "front or rear differential",
+            "hydraulic power steering",
+            "brake fluid selection",
+        )
+    )
+
+
+def _prepend_service_brief(*, answer_text: str, language: str, active_car: str, symptom: str) -> str:
+    text = str(answer_text or "").strip()
+    if not text:
+        return text
+    lowered = text.lower()
+    if lowered.startswith("коротко:") or lowered.startswith("briefly:"):
+        return text
+
+    viscosity_match = re.search(r"\b\d{1,2}w-\d{2}\b", text, re.IGNORECASE)
+    volume_match = re.search(r"\b\d+(?:[.,]\d+)?\s*л\b", text, re.IGNORECASE)
+
+    if language == "ru":
+        oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "подходящую вязкость по мануалу"
+        volume_phrase = f", объем примерно {volume_match.group(0)}" if volume_match else ""
+        car_phrase = f" для {active_car}" if active_car else ""
+        brief = f"Коротко: в двигатель{car_phrase} лучше заливать синтетическое масло {oil_phrase}{volume_phrase}."
+    else:
+        oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "the OEM-recommended viscosity"
+        volume_phrase = f", roughly {volume_match.group(0)}" if volume_match else ""
+        car_phrase = f" for {active_car}" if active_car else ""
+        brief = f"Briefly: use a full-synthetic engine oil in {oil_phrase}{volume_phrase}{car_phrase}."
+
+    if not _looks_like_service_advice_query(symptom):
+        return text
+    return f"{brief}\n\n{text}"
+
+
 def _extract_last_search_symptom(history: str) -> str:
     blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
     for block in reversed(blocks):
@@ -814,8 +865,24 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             )
             return ChatResponse(answer=answer_text, links=[], quota=quota_payload(subscription))
 
+        service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
+        is_service_detail_turn = bool(
+            service_seed_query
+            and _looks_like_service_detail_prompt(str(latest_context.get("last_assistant_text") or ""))
+            and not _looks_like_service_advice_query(normalized.text)
+        )
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
-        parser_input = normalized.model_copy(update={"text": effective_symptom})
+        if is_service_detail_turn:
+            effective_symptom = service_seed_query
+
+        parser_query = effective_symptom
+        if is_service_detail_turn and str(normalized.text or "").strip():
+            if state.language == "ru":
+                parser_query = f"{effective_symptom}. Дополнительные условия пользователя: {normalized.text}"
+            else:
+                parser_query = f"{effective_symptom}. Additional user details: {normalized.text}"
+
+        parser_input = normalized.model_copy(update={"text": parser_query})
         try:
             parser_history = ""
             if _should_use_history_for_parser(state, decision):
@@ -828,7 +895,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 {
                     "active_car": state.active_car or normalized.car_info or user.car_info,
                     "symptom": effective_symptom,
-                    "query": effective_symptom,
+                    "query": parser_query,
                     "conversation_history": parser_history,
                     "deep_search": bool(state.should_deep_search),
                     "language": state.language or normalized.language,
@@ -931,6 +998,15 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 if state.language == "ru"
                 else "\n\nDid this solve the problem? If not, write 'not helped' and I will run a deeper search."
             )
+
+        if _looks_like_service_advice_query(effective_symptom):
+            answer_text = _prepend_service_brief(
+                answer_text=answer_text,
+                language=state.language,
+                active_car=state.active_car,
+                symptom=effective_symptom,
+            )
+
         await update_user_after_response(
             user,
             normalized,

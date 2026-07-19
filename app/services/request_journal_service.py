@@ -247,13 +247,20 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
                 question_text=question_text,
                 answer_text=answer_text,
             )
+            matched_request_question = str((matched_request or {}).get("question") or "").strip()
+            matched_request_answer, matched_request_links = _clean_case_answer(str((matched_request or {}).get("answer") or ""))
+            matched_request_answer = _clean_text(matched_request_answer, max_len=2600)
+            display_question = matched_request_question or question_text
+            display_answer = matched_request_answer or answer_text
+            display_sources = (matched_request or {}).get("sources") or matched_request_links or embedded_links or []
+            display_videos = (matched_request or {}).get("videos") or []
 
             vehicle_label = (
                 vehicle_labels.get(int(message.get("vehicle_id") or 0), "")
                 or vehicle_labels.get(int(pending_user.get("vehicle_id") or 0), "")
                 or vehicle_labels.get(int((matched_request or {}).get("vehicle_id") or 0), "")
                 or vehicle_labels.get(int(conversation_row.get("vehicle_id") or 0), "")
-                or _extract_vehicle_label(question_text)
+                or _extract_vehicle_label(display_question)
             )
             item_created_at = (
                 message.get("created_at")
@@ -267,8 +274,8 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
                 {
                     "id": (matched_request or {}).get("id") or message.get("id") or pending_user.get("id") or f"{cid}-{len(items)}",
                     "conversation_id": cid,
-                    "question": question_text,
-                    "answer": answer_text,
+                    "question": display_question,
+                    "answer": display_answer,
                     "date": _format_created_at(item_created_at),
                     "status": str((matched_request or {}).get("status") or conversation_row.get("status") or ""),
                     "vehicle": vehicle_label,
@@ -280,8 +287,8 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
                     ),
                     "type": str((matched_request or {}).get("request_type") or "conversation"),
                     "source": "web",
-                    "sources": (matched_request or {}).get("sources") or embedded_links or [],
-                    "videos": (matched_request or {}).get("videos") or [],
+                    "sources": display_sources,
+                    "videos": display_videos,
                     "parser_used": bool((matched_request or {}).get("parser_used")),
                     "deep_search_used": bool((matched_request or {}).get("deep_search_used")),
                     "created_at": item_created_at,
