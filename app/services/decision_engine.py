@@ -454,6 +454,29 @@ def _looks_like_service_detail_prompt(text: str) -> bool:
     )
 
 
+def _looks_like_vehicle_correction_feedback(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    if not lowered:
+        return False
+    explicit_markers = (
+        "я спросил про",
+        "я спрашивал про",
+        "нет я спросил про",
+        "нет, я спросил про",
+        "не про ниссан",
+        "не x trail",
+        "не x-trail",
+        "not nissan",
+        "i asked about",
+        "i asked for",
+        "wrong car",
+        "about crown",
+    )
+    if any(marker in lowered for marker in explicit_markers):
+        return True
+    return "про краун" in lowered or "about crown" in lowered
+
+
 def _build_service_parser_query(
     *,
     language: str,
@@ -528,6 +551,8 @@ def _prepend_service_brief(*, answer_text: str, language: str, active_car: str, 
                 brief = f"Коротко: в АКПП/вариатор{car_phrase} нужна жидкость CVT по заводскому допуску."
             else:
                 brief = f"Коротко: в АКПП{car_phrase} нужен обычный ATF по заводскому допуску."
+        elif service_target == "brakes":
+            brief = f"Коротко: в тормозную систему{car_phrase} нужна тормозная жидкость нужного DOT по заводскому допуску."
         elif service_target == "engine":
             oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "подходящую вязкость по мануалу"
             volume_phrase = f", объем примерно {volume_match.group(0)}" if volume_match else ""
@@ -541,6 +566,8 @@ def _prepend_service_brief(*, answer_text: str, language: str, active_car: str, 
                 brief = f"Briefly: the transmission{car_phrase} needs OEM-spec CVT fluid."
             else:
                 brief = f"Briefly: the automatic transmission{car_phrase} needs OEM-spec regular ATF."
+        elif service_target == "brakes":
+            brief = f"Briefly: the brake system{car_phrase} needs the OEM-recommended DOT brake fluid."
         elif service_target == "engine":
             oil_phrase = viscosity_match.group(0).upper() if viscosity_match else "the OEM-recommended viscosity"
             volume_phrase = f", roughly {volume_match.group(0)}" if volume_match else ""
@@ -641,7 +668,12 @@ def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str
             if service_target == "transmission":
                 return (
                     f"Для точного подбора жидкости в АКПП{car_phrase} нужно знать точное обозначение коробки и заводской допуск ATF.\n\n"
-                    "Если под рукой нет мануала, пришлите код коробки, шильдик трансмиссии или рынок/год выпуска машины."
+                      "Если под рукой нет мануала, пришлите код коробки, шильдик трансмиссии или рынок/год выпуска машины."
+                  )
+            if service_target == "brakes":
+                return (
+                    f"Для точного подбора тормозной жидкости{car_phrase} нужно знать требование по DOT и желательно заводской допуск.\n\n"
+                    "Если мануала нет, обычно ориентируются на тип DOT, год машины и состояние тормозной системы. Пришлите рынок/год выпуска и, если знаете, предыдущую жидкость."
                 )
             if service_target == "engine":
                 return (
@@ -657,6 +689,11 @@ def _generic_diagnostic_fallback(*, language: str, active_car: str, symptom: str
             return (
                 f"To choose the correct transmission fluid{car_phrase}, I need the exact gearbox designation and OEM ATF approval.\n\n"
                 "If you do not have the manual, send the gearbox code, transmission tag, or the market/year of the car."
+            )
+        if service_target == "brakes":
+            return (
+                f"To choose the correct brake fluid{car_phrase}, I need the DOT requirement and ideally the OEM approval.\n\n"
+                "If you do not have the manual, send the market/year of the car and any previous brake fluid spec you know."
             )
         if service_target == "engine":
             return (
@@ -758,12 +795,18 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     service_seed_car = _extract_active_car_from_text(service_seed_query)
     latest_assistant_text = str(latest_context.get("last_assistant_text") or "")
     latest_user_text = str(latest_context.get("last_user_text") or "")
-    service_target = (
-        _extract_service_target_from_prompt(latest_assistant_text)
-        or _extract_service_target_reply(normalized.text)
-        or _extract_service_target_reply(latest_user_text)
-        or _extract_service_target_reply(service_seed_query)
-    )
+    service_prompt_target = _extract_service_target_from_prompt(latest_assistant_text)
+    service_reply_target = _extract_service_target_reply(normalized.text)
+    service_target = service_prompt_target or service_reply_target
+    if not (
+        _looks_like_service_clarification_prompt(latest_assistant_text)
+        or _looks_like_service_detail_prompt(latest_assistant_text)
+    ):
+        service_target = (
+            service_target
+            or _extract_service_target_reply(latest_user_text)
+            or _extract_service_target_reply(service_seed_query)
+        )
     if mentioned_car:
         state.active_car = mentioned_car
     elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
@@ -887,6 +930,32 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
+    if (
+        service_reply_target
+        and _looks_like_service_advice_query(normalized.text)
+        and not _looks_like_service_clarification_prompt(latest_assistant_text)
+        and not _looks_like_service_detail_prompt(latest_assistant_text)
+        and not state.is_feedback_helped
+        and not state.is_feedback_not_helped
+    ):
+        answer_text = _service_target_followup_response(
+            language=state.language,
+            active_car=state.active_car,
+            target=service_reply_target,
+        )
+        await update_user_after_response(
+            user,
+            normalized,
+            answer_text,
+            should_decrease_limit=False,
+            active_car=state.active_car,
+            symptom=normalized.text,
+            message_type="clarification",
+            vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
+        )
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
+
     if _looks_like_service_advice_query(normalized.text) and not state.is_feedback_helped and not state.is_feedback_not_helped:
         answer_text = _service_advice_clarification(
             language=state.language,
@@ -928,8 +997,57 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 state.active_car = dialog_vehicle_label
             else:
                 vehicle_id = None
-        elif not state.active_car:
-            state.active_car = str(latest_context.get("active_car") or "").strip()
+
+    vehicle_correction_feedback = bool(
+        service_seed_query
+        and state.is_feedback_not_helped
+        and _looks_like_vehicle_correction_feedback(normalized.text)
+    )
+    if vehicle_correction_feedback:
+        corrected_car = service_seed_car or mentioned_car or state.active_car
+        if corrected_car:
+            state.active_car = corrected_car
+        answer_text = _service_target_followup_response(
+            language=state.language,
+            active_car=state.active_car,
+            target=service_prompt_target or _extract_service_target_reply(service_seed_query) or "engine",
+        )
+        await update_user_after_response(
+            user,
+            normalized,
+            answer_text,
+            should_decrease_limit=False,
+            active_car=state.active_car,
+            symptom=service_seed_query,
+            message_type="clarification",
+            vehicle_id=vehicle_id,
+            force_new_conversation=False,
+        )
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
+    elif not state.active_car:
+        state.active_car = str(latest_context.get("active_car") or "").strip()
+
+    if service_detail_context and service_prompt_target == "transmission":
+        transmission_kind = _extract_service_transmission_kind(normalized.text)
+        if transmission_kind:
+            answer_text = _generic_diagnostic_fallback(
+                language=state.language,
+                active_car=state.active_car,
+                symptom=service_seed_query,
+                service_target="transmission",
+            )
+            await update_user_after_response(
+                user,
+                normalized,
+                answer_text,
+                should_decrease_limit=False,
+                active_car=state.active_car,
+                symptom=service_seed_query,
+                message_type="clarification",
+                vehicle_id=vehicle_id,
+                force_new_conversation=False,
+            )
+            return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
     if state.needs_problem_clarification:
         answer_text = _fallback_diagnostic_prompt(state.language)
