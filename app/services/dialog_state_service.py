@@ -23,6 +23,9 @@ class DialogState:
     is_feedback_not_helped: bool
     should_search: bool
     should_deep_search: bool
+    active_service_flow: bool = False
+    service_target: str = ""
+    service_subtype: str = ""
 
 
 def _extract_last_value(history: str, key: str) -> str:

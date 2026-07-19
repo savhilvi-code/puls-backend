@@ -10,6 +10,7 @@ from app.database.supabase import (
 )
 from app.schemas.user import UserRecord
 from app.services.conversation_service import (
+    _looks_like_service_query,
     build_user_conversation_history,
     get_latest_active_car,
     get_or_create_conversation,
@@ -38,6 +39,15 @@ from app.services.subscription_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _should_promote_to_confirmed_case(*, diagnostic_request: dict | None, active_car: str, fallback_text: str) -> bool:
+    question = str((diagnostic_request or {}).get("question") or fallback_text or "").strip()
+    if not question:
+        return False
+    if _looks_like_service_query(question):
+        return False
+    return bool(active_car or str(question).strip())
 
 
 def _build_transient_user(normalized) -> UserRecord:
@@ -239,17 +249,22 @@ async def update_user_after_response(
                     diagnostic_request_id=target_request_id,
                     payload={"status": "solved"},
                 )
-                create_solved_case_from_diagnostic(
-                    user_id=user.id,
-                    vehicle_id=vehicle_id,
-                    diagnostic_request=target_request,
-                    car_info=active_car or normalized.car_info,
-                )
-                await save_confirmed_case_to_knowledge(
+                if _should_promote_to_confirmed_case(
                     diagnostic_request=target_request,
                     active_car=active_car or normalized.car_info,
-                    language=normalized.language,
-                )
+                    fallback_text=normalized.text,
+                ):
+                    create_solved_case_from_diagnostic(
+                        user_id=user.id,
+                        vehicle_id=vehicle_id,
+                        diagnostic_request=target_request,
+                        car_info=active_car or normalized.car_info,
+                    )
+                    await save_confirmed_case_to_knowledge(
+                        diagnostic_request=target_request,
+                        active_car=active_car or normalized.car_info,
+                        language=normalized.language,
+                    )
             elif feedback_type in {"not_helped", "need_more", "unclear"} and target_request_id:
                 update_diagnostic_request(
                     diagnostic_request_id=target_request_id,

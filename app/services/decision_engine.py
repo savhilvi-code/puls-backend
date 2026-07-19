@@ -389,6 +389,66 @@ def _extract_service_transmission_kind(text: str) -> str:
     return ""
 
 
+def _extract_service_subtype(text: str, target: str = "") -> str:
+    lowered = _normalize_phrase(text)
+    if any(token in lowered for token in ("cvt", "вариатор")):
+        return "cvt"
+    if any(token in lowered for token in ("atf", "обычный автомат", "automatic", "normal atf", "regular atf")):
+        return "atf"
+    if any(token in lowered for token in ("dot 3", "dot 4", "dot 5", "dot")):
+        return "dot"
+    if any(token in lowered for token in ("антифриз", "coolant", "охлажда")):
+        return "coolant"
+    if re.search(r"\b\d{1,2}w-\d{2}\b", lowered, re.IGNORECASE) or any(
+        token in lowered for token in ("вязкость", "viscosity", "oil spec", "допуск масла")
+    ):
+        return "viscosity"
+    if target == "power_steering" or any(token in lowered for token in ("гур", "power steering", "steering fluid")):
+        return "steering"
+    if any(token in lowered for token in ("климат", "climate")):
+        return "climate"
+    return ""
+
+
+def _looks_like_service_followup_reply(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    if not lowered:
+        return False
+    if _extract_active_car_from_text(text):
+        return True
+    if _extract_service_target_reply(text) or _extract_service_transmission_kind(text) or _extract_service_subtype(text):
+        return True
+    if any(
+        token in lowered
+        for token in (
+            "dot",
+            "oem",
+            "мануал",
+            "gearbox",
+            "короб",
+            "допуск",
+            "вязкость",
+            "climate",
+            "климат",
+            "lsd",
+            "hydraulic",
+            "гидравл",
+        )
+    ):
+        return True
+    return len(lowered.split()) <= 8 and not _looks_like_diagnostic_intent(text)
+
+
+def _is_service_flow_active(*, service_seed_query: str, latest_assistant_text: str, latest_user_text: str, current_text: str) -> bool:
+    if not service_seed_query:
+        return False
+    if _looks_like_service_advice_query(current_text):
+        return True
+    if _looks_like_service_clarification_prompt(latest_assistant_text) or _looks_like_service_detail_prompt(latest_assistant_text):
+        return _looks_like_service_followup_reply(current_text)
+    return _looks_like_service_advice_query(latest_user_text) and _looks_like_service_followup_reply(current_text)
+
+
 def _service_target_followup_response(*, language: str, active_car: str, target: str) -> str:
     car_part = f" на {active_car}" if active_car else ""
     if language == "ru":
@@ -807,10 +867,30 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             or _extract_service_target_reply(latest_user_text)
             or _extract_service_target_reply(service_seed_query)
         )
+    service_flow_active = _is_service_flow_active(
+        service_seed_query=service_seed_query,
+        latest_assistant_text=latest_assistant_text,
+        latest_user_text=latest_user_text,
+        current_text=normalized.text,
+    )
+    service_subtype = _extract_service_subtype(normalized.text, service_target)
+    if not service_subtype:
+        service_subtype = _extract_service_subtype(service_seed_query, service_target)
+    state.active_service_flow = service_flow_active
+    state.service_target = service_target
+    state.service_subtype = service_subtype
     if mentioned_car:
         state.active_car = mentioned_car
     elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
         state.active_car = resolved_car_label
+    elif service_flow_active:
+        remembered_car = (
+            service_seed_car
+            or str(latest_context.get("active_car") or "").strip()
+            or state.active_car
+        )
+        if remembered_car:
+            state.active_car = remembered_car
 
     if state.active_car and _should_clear_vehicle_binding(
         active_car=state.active_car,
@@ -837,6 +917,10 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         state.needs_problem_clarification = False
         state.should_search = False
         state.should_deep_search = False
+
+    if service_flow_active:
+        state.needs_car_clarification = False
+        state.needs_problem_clarification = False
 
     if (
         _should_force_parser(normalized.text)
@@ -1027,28 +1111,6 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     elif not state.active_car:
         state.active_car = str(latest_context.get("active_car") or "").strip()
 
-    if service_detail_context and service_prompt_target == "transmission":
-        transmission_kind = _extract_service_transmission_kind(normalized.text)
-        if transmission_kind:
-            answer_text = _generic_diagnostic_fallback(
-                language=state.language,
-                active_car=state.active_car,
-                symptom=service_seed_query,
-                service_target="transmission",
-            )
-            await update_user_after_response(
-                user,
-                normalized,
-                answer_text,
-                should_decrease_limit=False,
-                active_car=state.active_car,
-                symptom=service_seed_query,
-                message_type="clarification",
-                vehicle_id=vehicle_id,
-                force_new_conversation=False,
-            )
-            return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
-
     if state.needs_problem_clarification:
         answer_text = _fallback_diagnostic_prompt(state.language)
         await update_user_after_response(
@@ -1192,6 +1254,8 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             and _looks_like_service_detail_prompt(latest_assistant_text)
             and not _looks_like_service_advice_query(normalized.text)
         )
+        if service_flow_active and service_seed_query and _looks_like_service_followup_reply(normalized.text):
+            is_service_detail_turn = True
         effective_symptom = state.previous_symptom if state.should_deep_search and state.previous_symptom else state.current_symptom
         if is_service_detail_turn:
             effective_symptom = service_seed_query
