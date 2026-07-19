@@ -27,6 +27,19 @@ def _format_created_at(value: str | None) -> str:
         return raw
 
 
+def _sort_timestamp(value: str | None) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except Exception:
+        return 0.0
+
+
 def _extract_vehicle_label(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -157,48 +170,86 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
         cid = int(row.get("conversation_id") or 0)
         messages_by_conversation.setdefault(cid, []).append(row)
 
-    diagnostic_by_conversation: dict[int, dict] = {}
+    conversation_by_id: dict[int, dict] = {}
+    diagnostic_by_conversation: dict[int, list[dict]] = {}
     for row in diagnostic_rows:
         cid = int(row.get("conversation_id") or 0)
-        diagnostic_by_conversation.setdefault(cid, row)
+        diagnostic_by_conversation.setdefault(cid, []).append(row)
 
     items: list[dict] = []
     for row in conversation_rows:
         cid = int(row.get("id") or 0)
+        conversation_by_id[cid] = row
         conversation_messages = messages_by_conversation.get(cid, [])
         user_messages = [item for item in conversation_messages if str(item.get("role") or "") == "user"]
         assistant_messages = [item for item in conversation_messages if str(item.get("role") or "") == "assistant"]
         first_user = str((user_messages[0] if user_messages else {}).get("message_text") or row.get("title") or "").strip()
         last_assistant = str((assistant_messages[-1] if assistant_messages else {}).get("message_text") or "").strip()
-        latest_request = diagnostic_by_conversation.get(cid, {})
-        answer_text, embedded_links = _clean_case_answer(str(latest_request.get("answer") or last_assistant or ""))
+        request_rows = diagnostic_by_conversation.get(cid, [])
+        if request_rows:
+            continue
+
+        answer_text, embedded_links = _clean_case_answer(str(last_assistant or ""))
         answer_text = _clean_text(answer_text, max_len=2600)
         vehicle_label = (
             vehicle_labels.get(int(row.get("vehicle_id") or 0), "")
-            or vehicle_labels.get(int(latest_request.get("vehicle_id") or 0), "")
-            or _extract_vehicle_label(str(latest_request.get("question") or first_user))
+            or _extract_vehicle_label(first_user)
         )
         items.append(
             {
-                "id": latest_request.get("id") or cid,
+                "id": cid,
                 "conversation_id": cid,
-                "question": str(latest_request.get("question") or first_user),
+                "question": first_user,
                 "answer": answer_text,
                 "date": _format_created_at(row.get("updated_at") or row.get("last_message_at") or row.get("created_at")),
-                "status": str(latest_request.get("status") or row.get("status") or ""),
+                "status": str(row.get("status") or ""),
                 "vehicle": vehicle_label,
-                "vehicle_id": latest_request.get("vehicle_id") or row.get("vehicle_id"),
-                "type": str(latest_request.get("request_type") or "conversation"),
+                "vehicle_id": row.get("vehicle_id"),
+                "type": "conversation",
                 "source": "web",
-                "sources": latest_request.get("sources") or embedded_links or [],
-                "videos": latest_request.get("videos") or [],
-                "parser_used": bool(latest_request.get("parser_used")),
-                "deep_search_used": bool(latest_request.get("deep_search_used")),
-                "created_at": row.get("created_at") or "",
+                "sources": embedded_links or [],
+                "videos": [],
+                "parser_used": False,
+                "deep_search_used": False,
+                "created_at": row.get("updated_at") or row.get("last_message_at") or row.get("created_at") or "",
                 "message_count": len(conversation_messages),
             }
         )
-    return items
+
+    for request in diagnostic_rows:
+        cid = int(request.get("conversation_id") or 0)
+        conversation_row = conversation_by_id.get(cid, {})
+        question_text = str(request.get("question") or "").strip()
+        answer_text, embedded_links = _clean_case_answer(str(request.get("answer") or ""))
+        answer_text = _clean_text(answer_text, max_len=2600)
+        vehicle_label = (
+            vehicle_labels.get(int(request.get("vehicle_id") or 0), "")
+            or vehicle_labels.get(int(conversation_row.get("vehicle_id") or 0), "")
+            or _extract_vehicle_label(question_text)
+        )
+        items.append(
+            {
+                "id": request.get("id"),
+                "conversation_id": cid,
+                "question": question_text,
+                "answer": answer_text,
+                "date": _format_created_at(request.get("created_at") or conversation_row.get("updated_at") or conversation_row.get("created_at")),
+                "status": str(request.get("status") or conversation_row.get("status") or ""),
+                "vehicle": vehicle_label,
+                "vehicle_id": request.get("vehicle_id") or conversation_row.get("vehicle_id"),
+                "type": str(request.get("request_type") or "conversation"),
+                "source": "web",
+                "sources": request.get("sources") or embedded_links or [],
+                "videos": request.get("videos") or [],
+                "parser_used": bool(request.get("parser_used")),
+                "deep_search_used": bool(request.get("deep_search_used")),
+                "created_at": request.get("created_at") or "",
+                "message_count": len(messages_by_conversation.get(cid, [])),
+            }
+        )
+
+    items.sort(key=lambda item: _sort_timestamp(item.get("created_at")), reverse=True)
+    return items[:limit]
 
 
 async def get_conversation_messages(*, conversation_id: int, user_id: int | None = None, email: str = "") -> list[dict]:
