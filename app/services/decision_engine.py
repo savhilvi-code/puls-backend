@@ -1,6 +1,7 @@
 import re
 
 from app.schemas.chat import ChatResponse
+from app.services.conversation_service import get_latest_conversation_context
 from app.services.dialog_state_service import build_dialog_state
 from app.services.formatter_service import format_from_kb, format_technical_answer
 from app.services.kb_service import (
@@ -300,6 +301,73 @@ def _service_advice_clarification(*, language: str, active_car: str) -> str:
     )
 
 
+def _extract_service_target_reply(text: str) -> str:
+    lowered = _normalize_phrase(text)
+    target_map = {
+        "engine": ("для двс", "двс", "двигатель", "для двигателя", "в двигатель", "engine", "motor"),
+        "transmission": ("акпп", "вариатор", "cvt", "atf", "коробка", "трансмиссия", "transmission"),
+        "transfer_case": ("раздатка", "transfer case"),
+        "differential": ("редуктор", "дифф", "differential"),
+        "power_steering": ("гур", "power steering", "steering fluid"),
+        "brakes": ("тормоз", "brake fluid", "brakes"),
+    }
+    for target, phrases in target_map.items():
+        if any(phrase in lowered for phrase in phrases):
+            return target
+    return ""
+
+
+def _looks_like_service_clarification_prompt(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    return (
+        "для какого узла" in lowered
+        or "which system" in lowered
+        or "needs fluid selection" in lowered
+        or "нужно подобрать жидкость" in lowered
+    )
+
+
+def _service_target_followup_response(*, language: str, active_car: str, target: str) -> str:
+    car_part = f" на {active_car}" if active_car else ""
+    if language == "ru":
+        replies = {
+            "engine": (
+                f"Понял, речь про двигатель{car_part}. Напишите климат эксплуатации и желаемую вязкость, "
+                "если уже смотрели мануал. Если допуска не знаете, я подскажу, на что ориентироваться по вязкости и спецификации."
+            ),
+            "transmission": (
+                f"Понял, речь про АКПП/вариатор{car_part}. Уточните, пожалуйста, какая именно коробка стоит на машине "
+                "и нужен ли обычный ATF или жидкость для вариатора."
+            ),
+            "transfer_case": f"Понял, речь про раздатку{car_part}. Уточните, пожалуйста, тип привода и если знаете требуемый допуск масла.",
+            "differential": f"Понял, речь про редуктор{car_part}. Уточните, передний или задний редуктор и есть ли требования по LSD/обычному дифференциалу.",
+            "power_steering": f"Понял, речь про ГУР{car_part}. Уточните, нужен именно гидравлический ГУР или электроусилитель, чтобы не спутать тип жидкости.",
+            "brakes": f"Понял, речь про тормозную систему{car_part}. Уточните, нужен подбор тормозной жидкости DOT и есть ли требования из мануала.",
+        }
+        return replies.get(
+            target,
+            f"Понял, нужен подбор жидкости{car_part}. Уточните, пожалуйста, нужный узел и желаемый допуск или вязкость."
+        )
+    replies = {
+        "engine": (
+            f"Understood, this is for the engine{car_part}. Please tell me the climate and preferred viscosity "
+            "if you already checked the manual. If you do not know the spec yet, I can guide you by viscosity and approval."
+        ),
+        "transmission": (
+            f"Understood, this is for the automatic transmission/CVT{car_part}. Please clarify which gearbox is installed "
+            "and whether you need regular ATF or a dedicated CVT fluid."
+        ),
+        "transfer_case": f"Understood, this is for the transfer case{car_part}. Please clarify the drivetrain type and any oil approval if you know it.",
+        "differential": f"Understood, this is for the differential{car_part}. Please clarify whether it is the front or rear differential and whether LSD requirements apply.",
+        "power_steering": f"Understood, this is for the power steering system{car_part}. Please confirm whether it is hydraulic power steering so I do not mix it with EPS.",
+        "brakes": f"Understood, this is for the brake system{car_part}. Please confirm whether you need brake fluid selection and any DOT requirement from the manual.",
+    }
+    return replies.get(
+        target,
+        f"Understood, you need fluid selection{car_part}. Please clarify the exact system and any viscosity or approval you want to match."
+    )
+
+
 def _extract_last_search_symptom(history: str) -> str:
     blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
     for block in reversed(blocks):
@@ -469,6 +537,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
 
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
+    latest_context = get_latest_conversation_context(user_id=user.id)
     if mentioned_car:
         state.active_car = mentioned_car
     elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
@@ -550,6 +619,39 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             should_decrease_limit=False,
             active_car=state.active_car,
             symptom=state.current_symptom,
+            message_type="clarification",
+            vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
+        )
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
+
+    service_target_reply = _extract_service_target_reply(normalized.text)
+    if (
+        service_target_reply
+        and latest_context
+        and _looks_like_service_advice_query(str(latest_context.get("last_user_text") or ""))
+        and _looks_like_service_clarification_prompt(str(latest_context.get("last_assistant_text") or ""))
+        and not state.is_feedback_helped
+        and not state.is_feedback_not_helped
+    ):
+        effective_car = (
+            state.active_car
+            or str(latest_context.get("active_car") or "").strip()
+            or normalized.car_info
+            or user.car_info
+        )
+        answer_text = _service_target_followup_response(
+            language=state.language,
+            active_car=effective_car,
+            target=service_target_reply,
+        )
+        await update_user_after_response(
+            user,
+            normalized,
+            answer_text,
+            should_decrease_limit=False,
+            active_car=effective_car,
+            symptom=str(latest_context.get("last_user_text") or state.current_symptom),
             message_type="clarification",
             vehicle_id=vehicle_id,
             force_new_conversation=bool(mentioned_car),

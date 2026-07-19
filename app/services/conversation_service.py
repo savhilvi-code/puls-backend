@@ -127,6 +127,67 @@ def save_message(
     return rows[0] if rows else None
 
 
+def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
+    if user_id is None:
+        return {}
+
+    client = get_supabase_client()
+    conversation_rows = _rows(
+        client.table("conversations")
+        .select("id,vehicle_id,updated_at")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .order("updated_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not conversation_rows:
+        return {}
+
+    conversation = conversation_rows[0]
+    conversation_id = conversation.get("id")
+    if not conversation_id:
+        return {}
+
+    message_rows = _rows(
+        client.table("messages")
+        .select("role,message_text,created_at")
+        .eq("conversation_id", conversation_id)
+        .order("created_at", desc=False)
+        .limit(12)
+        .execute()
+    )
+    if not message_rows:
+        return {}
+
+    last_assistant_text = ""
+    last_user_text = ""
+    for index in range(len(message_rows) - 1, -1, -1):
+        row = message_rows[index]
+        role = str(row.get("role") or "").strip().lower()
+        text = str(row.get("message_text") or "").strip()
+        if role == "assistant" and text:
+            last_assistant_text = text
+            for previous_index in range(index - 1, -1, -1):
+                previous_row = message_rows[previous_index]
+                if str(previous_row.get("role") or "").strip().lower() == "user":
+                    last_user_text = str(previous_row.get("message_text") or "").strip()
+                    break
+            break
+
+    vehicle_label = ""
+    vehicle_id = conversation.get("vehicle_id")
+    if vehicle_id:
+        vehicle_label = _load_vehicle_labels([int(vehicle_id)]).get(int(vehicle_id), "")
+
+    return {
+        "conversation_id": str(conversation_id),
+        "active_car": vehicle_label,
+        "last_user_text": last_user_text,
+        "last_assistant_text": last_assistant_text,
+    }
+
+
 def build_user_conversation_history(*, user_id: int | None, limit: int = 12) -> str:
     if user_id is None:
         return ""
