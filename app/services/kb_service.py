@@ -7,6 +7,7 @@ from app.database.supabase import (
     SupabaseOperationError,
     SupabaseUnavailableError,
     create_knowledge_case,
+    create_knowledge_event,
     get_supabase_client,
 )
 from app.services.formatter_service import format_from_kb
@@ -162,7 +163,45 @@ def _row_links(row: dict) -> list[dict]:
                 )
             if normalized:
                 return normalized
-    return []
+    return [] 
+
+
+def _diagnostic_vehicle_label(diagnostic_request: dict | None, active_car: str = "") -> str:
+    row = diagnostic_request or {}
+    parts = [
+        str(row.get("brand") or "").strip(),
+        str(row.get("model") or "").strip(),
+        str(row.get("year") or "").strip(),
+        str(row.get("engine") or "").strip(),
+    ]
+    label = " ".join(part for part in parts if part).strip()
+    if label:
+        return label
+    return str(active_car or "").strip()
+
+
+def _log_confirmed_knowledge_event(*, diagnostic_request: dict | None, vehicle_label: str, answer: str, language: str, result: str) -> None:
+    row = diagnostic_request or {}
+    symptom = str(
+        row.get("raw_question")
+        or row.get("question")
+        or row.get("symptoms")
+        or ""
+    ).strip()
+    if not symptom:
+        return
+    payload = {
+        "country": language,
+        "symptom": symptom[:1000],
+        "cause": vehicle_label[:1000] if vehicle_label else None,
+        "solution": answer[:4000] if answer else None,
+        "result": result,
+        "source": "confirmed_feedback",
+    }
+    try:
+        create_knowledge_event(payload)
+    except (SupabaseUnavailableError, SupabaseOperationError):
+        return
 
 
 def _knowledge_case_rows(client) -> list[dict]:
@@ -564,6 +603,7 @@ async def save_knowledge_case(normalized, decision, parsed_case) -> dict | None:
 async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, active_car: str = "", language: str = "ru") -> dict | None:
     if not diagnostic_request:
         return None
+    vehicle_label = _diagnostic_vehicle_label(diagnostic_request, active_car)
     question = str(
         diagnostic_request.get("raw_question")
         or diagnostic_request.get("question")
@@ -575,7 +615,7 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
         return None
     if _is_placeholder_case(
         {
-            "symptom_title": active_car or question,
+            "symptom_title": vehicle_label or question,
             "symptom_description": question,
             "confirmed_cause": question,
             "recommended_action": answer,
@@ -584,7 +624,7 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
     ):
         return None
     payload = {
-        "symptom_title": (active_car or question)[:500],
+        "symptom_title": (vehicle_label or question)[:500],
         "symptom_description": question,
         "confirmed_cause": question,
         "recommended_action": answer[:4000],
@@ -611,7 +651,7 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
             )
             if question and not _contains_any(haystack, question):
                 continue
-            if active_car and not _vehicle_context_matches(haystack, active_car):
+            if vehicle_label and not _vehicle_context_matches(haystack, vehicle_label):
                 continue
             updated_payload = {
                 "recommended_action": answer[:4000],
@@ -630,8 +670,24 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
             updated_rows = getattr(updated, "data", []) or []
             if updated_rows:
                 updated_rows[0]["source_table"] = "knowledge_cases"
+                _log_confirmed_knowledge_event(
+                    diagnostic_request=diagnostic_request,
+                    vehicle_label=vehicle_label,
+                    answer=answer,
+                    language=language,
+                    result="knowledge_case_updated_from_feedback",
+                )
                 return updated_rows[0]
-        return create_knowledge_case(payload)
+        created = create_knowledge_case(payload)
+        if created:
+            _log_confirmed_knowledge_event(
+                diagnostic_request=diagnostic_request,
+                vehicle_label=vehicle_label,
+                answer=answer,
+                language=language,
+                result="knowledge_case_created_from_feedback",
+            )
+        return created
     except (SupabaseUnavailableError, SupabaseOperationError):
         return None
 

@@ -212,3 +212,31 @@ flowchart LR
 - Knowledge lookup checks both `knowledge_cases` and confirmed `solved_cases` before Parser/Deep Search starts.
 - Parser history context is filtered by the active vehicle before it is passed to Parser/Deep Search, preventing old-car contamination.
 - `solved_cases` keeps vehicle snapshot fields, so successful cases remain useful after a user deletes a personal vehicle card.
+
+## Page To Table Matrix
+
+The current production rule is to keep distinct tables for distinct product surfaces. The problem is not the number of tables; the problem is whether every page reads and writes the correct table with the correct vehicle context.
+
+| Page | Source tables | Backend writer | Frontend reader | Current status |
+| --- | --- | --- | --- | --- |
+| My Car | `vehicles` | `app/routers/vehicles.py`, `app/services/puls_data_service.py` | `assets/js/app.js` via `/api/vehicles` | Production-backed |
+| Service and maintenance block inside My Car | `vehicle_service_logs` | not yet connected in runtime flow | `assets/js/app.js` local draft/localStorage flow | UI exists, backend table not yet wired |
+| Request History | `conversations`, `messages`, `diagnostic_requests` | `conversation_service`, `diagnostic_service`, `user_service` | `assets/js/app.js` via `/api/history` | Production-backed |
+| Request Journal / solved work cases | `solved_cases` enriched through `/api/history` | `puls_data_service.create_solved_case_from_diagnostic`, `user_service` | `assets/js/app.js` history/journal renderer | Production-backed, vehicle binding must stay strict |
+| Shared knowledge base | `knowledge_cases`, `knowledge_events` | `kb_service.save_confirmed_case_to_knowledge` | backend lookup only | Production-backed, promotion must stay vehicle-safe |
+| Videos | `video_library` as personal shelf, `media_files` as all found materials | `media_service`, `puls_data_service.save_video_library`, `user_service` | current page still uses static/demo rows | Backend write path exists, frontend reader not yet switched |
+| DTC | `dtc_errors` | not yet connected in runtime flow | current page still uses static/demo rows | Demo/UI only for now |
+| Manuals | `media_files` or future manuals table/catalog | not yet connected in runtime flow | current page still uses static/demo rows | Demo/UI only for now |
+| Parser / Deep Search trace | `parser_runs`, `media_files` | `parser_run_service`, `media_service`, `user_service` | not exposed as dedicated page yet | Production-backed persistence |
+| Quota and subscription | `subscriptions`, `payments` | `subscription_service` | `assets/js/app.js` from backend quota payload and settings screen | Production-backed for quota, payments not yet live |
+
+## Persistence Rules
+
+- `vehicles` is the only source of truth for user-owned cars.
+- `vehicle_profiles` is a catalog/reference table and must not be used as the storage for user-owned cars.
+- `solved_cases` stores only the user's own confirmed completed cases.
+- `knowledge_cases` stores only promoted, vehicle-safe, confirmed cases after feedback-based validation.
+- `knowledge_events` logs when and why a confirmed case is promoted into the shared knowledge layer.
+- `media_files` stores all found links, documents, and materials tied to a diagnostic request.
+- `video_library` stores only the personal video subset of the broader `media_files`/search output.
+- Pages that are still demo/static must not be described in UI copy as if they already reflect production persistence.

@@ -307,14 +307,27 @@ def save_video_library(*, user_id: int | None, vehicle_id: int | None, diagnosti
     def operation():
         client = get_supabase_client()
         for item in videos:
+            url = str(item.get("url") or "").strip()
+            if not url:
+                continue
+            exists = (
+                client.table("video_library")
+                .select("id")
+                .eq("user_id", user_id)
+                .eq("url", url)
+                .limit(1)
+                .execute()
+            )
+            if _rows(exists):
+                continue
             client.table("video_library").insert(
                 {
                     "user_id": user_id,
                     "vehicle_id": vehicle_id,
                     "diagnostic_request_id": diagnostic_request_id,
                     "title": item.get("title") or "Video",
-                    "url": item.get("url"),
-                    "platform": "youtube" if "youtu" in item.get("url", "").lower() else "browser",
+                    "url": url,
+                    "platform": "youtube" if "youtu" in url.lower() else "browser",
                     "topic": topic,
                 }
             ).execute()

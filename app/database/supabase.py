@@ -221,3 +221,15 @@ def create_knowledge_case(payload: dict[str, Any]):
         return rows[0] if rows else None
     except Exception as exc:
         raise SupabaseOperationError(f"Failed to create knowledge case: {exc}") from exc
+
+
+def create_knowledge_event(payload: dict[str, Any]):
+    if not is_supabase_configured():
+        raise SupabaseUnavailableError("Supabase is not configured.")
+
+    try:
+        response = _client().table("knowledge_events").insert(payload).execute()
+        rows = getattr(response, "data", []) or []
+        return rows[0] if rows else None
+    except Exception as exc:
+        raise SupabaseOperationError(f"Failed to create knowledge event: {exc}") from exc

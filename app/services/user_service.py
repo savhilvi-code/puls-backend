@@ -28,6 +28,7 @@ from app.services.puls_data_service import (
     classify_feedback,
     create_solved_case,
     create_solved_case_from_diagnostic,
+    save_video_library,
 )
 from app.services.kb_service import save_confirmed_case_to_knowledge
 from app.services.subscription_service import (
@@ -209,6 +210,13 @@ async def update_user_after_response(
                 vehicle_id=vehicle_id,
                 diagnostic_request_id=diagnostic_request_id,
                 links=normalized_links,
+            )
+            save_video_library(
+                user_id=user.id,
+                vehicle_id=vehicle_id,
+                diagnostic_request_id=diagnostic_request_id,
+                links=normalized_links,
+                topic=symptom or normalized.text,
             )
 
         if user.id is not None and feedback_type:
