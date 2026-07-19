@@ -373,14 +373,14 @@ def _looks_like_service_detail_prompt(text: str) -> bool:
     return any(
         phrase in lowered
         for phrase in (
-            "климат эксплуатации",
-            "желаемую вязкость",
-            "если уже смотрели мануал",
-            "какая именно коробка",
-            "тип привода",
-            "передний или задний редуктор",
-            "нужен именно гидравлический гур",
-            "нужен подбор тормозной жидкости",
+            "\u043a\u043b\u0438\u043c\u0430\u0442 \u044d\u043a\u0441\u043f\u043b\u0443\u0430\u0442\u0430\u0446\u0438\u0438",
+            "\u0436\u0435\u043b\u0430\u0435\u043c\u0443\u044e \u0432\u044f\u0437\u043a\u043e\u0441\u0442\u044c",
+            "\u0435\u0441\u043b\u0438 \u0443\u0436\u0435 \u0441\u043c\u043e\u0442\u0440\u0435\u043b\u0438 \u043c\u0430\u043d\u0443\u0430\u043b",
+            "\u043a\u0430\u043a\u0430\u044f \u0438\u043c\u0435\u043d\u043d\u043e \u043a\u043e\u0440\u043e\u0431\u043a\u0430",
+            "\u0442\u0438\u043f \u043f\u0440\u0438\u0432\u043e\u0434\u0430",
+            "\u043f\u0435\u0440\u0435\u0434\u043d\u0438\u0439 \u0438\u043b\u0438 \u0437\u0430\u0434\u043d\u0438\u0439 \u0440\u0435\u0434\u0443\u043a\u0442\u043e\u0440",
+            "\u043d\u0443\u0436\u0435\u043d \u0438\u043c\u0435\u043d\u043d\u043e \u0433\u0438\u0434\u0440\u0430\u0432\u043b\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0433\u0443\u0440",
+            "\u043d\u0443\u0436\u0435\u043d \u043f\u043e\u0434\u0431\u043e\u0440 \u0442\u043e\u0440\u043c\u043e\u0437\u043d\u043e\u0439 \u0436\u0438\u0434\u043a\u043e\u0441\u0442\u0438",
             "preferred viscosity",
             "checked the manual",
             "which gearbox is installed",
@@ -727,6 +727,21 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
+    service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
+    service_detail_context = bool(
+        service_seed_query
+        and _looks_like_service_detail_prompt(str(latest_context.get("last_assistant_text") or ""))
+        and not state.is_feedback_helped
+        and not state.is_feedback_not_helped
+    )
+    if service_detail_context and not _looks_like_service_advice_query(normalized.text):
+        state.needs_car_clarification = False
+        state.needs_problem_clarification = False
+        state.should_search = True
+        state.current_symptom = service_seed_query
+        if not state.active_car:
+            state.active_car = str(latest_context.get("active_car") or "").strip()
+
     if state.needs_problem_clarification:
         answer_text = _fallback_diagnostic_prompt(state.language)
         await update_user_after_response(
@@ -865,7 +880,6 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             )
             return ChatResponse(answer=answer_text, links=[], quota=quota_payload(subscription))
 
-        service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
         is_service_detail_turn = bool(
             service_seed_query
             and _looks_like_service_detail_prompt(str(latest_context.get("last_assistant_text") or ""))

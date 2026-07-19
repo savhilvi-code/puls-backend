@@ -33,16 +33,16 @@ def _normalize_context_text(text: str) -> str:
 def _looks_like_service_query(text: str) -> bool:
     lowered = _normalize_context_text(text)
     service_terms = (
-        "какое масло",
-        "какое масло подходит",
-        "какое масло лить",
-        "какое масло залить",
-        "какую жидкость",
-        "какой антифриз",
-        "какой atf",
-        "трансмиссионное масло",
-        "вязкость масла",
-        "допуск масла",
+        "\u043a\u0430\u043a\u043e\u0435 \u043c\u0430\u0441\u043b\u043e",
+        "\u043a\u0430\u043a\u043e\u0435 \u043c\u0430\u0441\u043b\u043e \u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442",
+        "\u043a\u0430\u043a\u043e\u0435 \u043c\u0430\u0441\u043b\u043e \u043b\u0438\u0442\u044c",
+        "\u043a\u0430\u043a\u043e\u0435 \u043c\u0430\u0441\u043b\u043e \u0437\u0430\u043b\u0438\u0442\u044c",
+        "\u043a\u0430\u043a\u0443\u044e \u0436\u0438\u0434\u043a\u043e\u0441\u0442\u044c",
+        "\u043a\u0430\u043a\u043e\u0439 \u0430\u043d\u0442\u0438\u0444\u0440\u0438\u0437",
+        "\u043a\u0430\u043a\u043e\u0439 atf",
+        "\u0442\u0440\u0430\u043d\u0441\u043c\u0438\u0441\u0441\u0438\u043e\u043d\u043d\u043e\u0435 \u043c\u0430\u0441\u043b\u043e",
+        "\u0432\u044f\u0437\u043a\u043e\u0441\u0442\u044c \u043c\u0430\u0441\u043b\u0430",
+        "\u0434\u043e\u043f\u0443\u0441\u043a \u043c\u0430\u0441\u043b\u0430",
         "what oil",
         "which oil",
         "oil recommendation",
@@ -53,7 +53,32 @@ def _looks_like_service_query(text: str) -> bool:
         "brake fluid",
         "power steering fluid",
     )
-    return any(term in lowered for term in service_terms)
+    if any(term in lowered for term in service_terms):
+        return True
+
+    mentions_fluid_topic = any(
+        token in lowered
+        for token in ("\u043c\u0430\u0441\u043b\u043e", "\u0436\u0438\u0434\u043a", "\u0430\u043d\u0442\u0438\u0444\u0440\u0438\u0437", "oil", "coolant", "atf", "fluid")
+    )
+    asks_for_selection = any(
+        token in lowered
+        for token in (
+            "\u043a\u0430\u043a\u043e\u0435",
+            "\u043a\u0430\u043a\u0443\u044e",
+            "\u043a\u0430\u043a\u043e\u0439",
+            "\u0437\u0430\u043b\u0438\u0442\u044c",
+            "\u043b\u0438\u0442\u044c",
+            "\u043f\u043e\u0434\u0445\u043e\u0434\u0438\u0442",
+            "\u0432\u044f\u0437\u043a\u043e\u0441\u0442\u044c",
+            "\u0434\u043e\u043f\u0443\u0441\u043a",
+            "what",
+            "which",
+            "recommendation",
+            "viscosity",
+            "spec",
+        )
+    )
+    return mentions_fluid_topic and asks_for_selection
 
 
 def _vehicle_label(row: dict | None) -> str:
