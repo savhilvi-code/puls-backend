@@ -82,6 +82,47 @@ def _extract_vehicle_label(text: str) -> str:
     return ""
 
 
+def _normalized_match_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _match_request_for_pair(
+    *,
+    request_rows: list[dict],
+    used_request_ids: set[int],
+    question_text: str,
+    answer_text: str,
+) -> dict | None:
+    normalized_question = _normalized_match_text(question_text)
+    normalized_answer = _normalized_match_text(answer_text)
+    if not normalized_question and not normalized_answer:
+        return None
+
+    for request in request_rows:
+        request_id = int(request.get("id") or 0)
+        if request_id and request_id in used_request_ids:
+            continue
+        request_question = _normalized_match_text(request.get("question"))
+        request_answer = _normalized_match_text(request.get("answer"))
+        if normalized_question and request_question and (
+            normalized_question == request_question
+            or normalized_question in request_question
+            or request_question in normalized_question
+        ):
+            if request_id:
+                used_request_ids.add(request_id)
+            return request
+        if normalized_answer and request_answer and (
+            normalized_answer == request_answer
+            or normalized_answer in request_answer
+            or request_answer in normalized_answer
+        ):
+            if request_id:
+                used_request_ids.add(request_id)
+            return request
+    return None
+
+
 def _vehicle_label(row: dict | None) -> str:
     row = row or {}
     return " ".join(
@@ -170,81 +211,110 @@ async def get_user_request_history(*, user_id: int | None = None, email: str = "
         cid = int(row.get("conversation_id") or 0)
         messages_by_conversation.setdefault(cid, []).append(row)
 
-    conversation_by_id: dict[int, dict] = {}
+    conversation_by_id = {
+        int(row.get("id") or 0): row
+        for row in conversation_rows
+        if row.get("id")
+    }
     diagnostic_by_conversation: dict[int, list[dict]] = {}
     for row in diagnostic_rows:
         cid = int(row.get("conversation_id") or 0)
         diagnostic_by_conversation.setdefault(cid, []).append(row)
 
     items: list[dict] = []
-    for row in conversation_rows:
-        cid = int(row.get("id") or 0)
-        conversation_by_id[cid] = row
+    for cid, conversation_row in conversation_by_id.items():
         conversation_messages = messages_by_conversation.get(cid, [])
-        user_messages = [item for item in conversation_messages if str(item.get("role") or "") == "user"]
-        assistant_messages = [item for item in conversation_messages if str(item.get("role") or "") == "assistant"]
-        first_user = str((user_messages[0] if user_messages else {}).get("message_text") or row.get("title") or "").strip()
-        last_assistant = str((assistant_messages[-1] if assistant_messages else {}).get("message_text") or "").strip()
         request_rows = diagnostic_by_conversation.get(cid, [])
-        if request_rows:
+        used_request_ids: set[int] = set()
+        pending_user: dict | None = None
+        conversation_item_count = 0
+
+        for message in conversation_messages:
+            role = str(message.get("role") or "").strip().lower()
+            text = str(message.get("message_text") or "").strip()
+            if role == "user" and text:
+                pending_user = message
+                continue
+            if role != "assistant" or not text or pending_user is None:
+                continue
+
+            question_text = str(pending_user.get("message_text") or "").strip()
+            answer_text, embedded_links = _clean_case_answer(text)
+            answer_text = _clean_text(answer_text, max_len=2600)
+            matched_request = _match_request_for_pair(
+                request_rows=request_rows,
+                used_request_ids=used_request_ids,
+                question_text=question_text,
+                answer_text=answer_text,
+            )
+
+            vehicle_label = (
+                vehicle_labels.get(int(message.get("vehicle_id") or 0), "")
+                or vehicle_labels.get(int(pending_user.get("vehicle_id") or 0), "")
+                or vehicle_labels.get(int((matched_request or {}).get("vehicle_id") or 0), "")
+                or vehicle_labels.get(int(conversation_row.get("vehicle_id") or 0), "")
+                or _extract_vehicle_label(question_text)
+            )
+            item_created_at = (
+                message.get("created_at")
+                or pending_user.get("created_at")
+                or (matched_request or {}).get("created_at")
+                or conversation_row.get("updated_at")
+                or conversation_row.get("created_at")
+                or ""
+            )
+            items.append(
+                {
+                    "id": (matched_request or {}).get("id") or message.get("id") or pending_user.get("id") or f"{cid}-{len(items)}",
+                    "conversation_id": cid,
+                    "question": question_text,
+                    "answer": answer_text,
+                    "date": _format_created_at(item_created_at),
+                    "status": str((matched_request or {}).get("status") or conversation_row.get("status") or ""),
+                    "vehicle": vehicle_label,
+                    "vehicle_id": (
+                        message.get("vehicle_id")
+                        or pending_user.get("vehicle_id")
+                        or (matched_request or {}).get("vehicle_id")
+                        or conversation_row.get("vehicle_id")
+                    ),
+                    "type": str((matched_request or {}).get("request_type") or "conversation"),
+                    "source": "web",
+                    "sources": (matched_request or {}).get("sources") or embedded_links or [],
+                    "videos": (matched_request or {}).get("videos") or [],
+                    "parser_used": bool((matched_request or {}).get("parser_used")),
+                    "deep_search_used": bool((matched_request or {}).get("deep_search_used")),
+                    "created_at": item_created_at,
+                    "message_count": len(conversation_messages),
+                }
+            )
+            conversation_item_count += 1
+            pending_user = None
+
+        if conversation_item_count or not conversation_messages:
             continue
 
-        answer_text, embedded_links = _clean_case_answer(str(last_assistant or ""))
-        answer_text = _clean_text(answer_text, max_len=2600)
-        vehicle_label = (
-            vehicle_labels.get(int(row.get("vehicle_id") or 0), "")
-            or _extract_vehicle_label(first_user)
-        )
+        title_text = str(conversation_row.get("title") or "").strip()
+        if not title_text:
+            continue
         items.append(
             {
                 "id": cid,
                 "conversation_id": cid,
-                "question": first_user,
-                "answer": answer_text,
-                "date": _format_created_at(row.get("updated_at") or row.get("last_message_at") or row.get("created_at")),
-                "status": str(row.get("status") or ""),
-                "vehicle": vehicle_label,
-                "vehicle_id": row.get("vehicle_id"),
+                "question": title_text,
+                "answer": "",
+                "date": _format_created_at(conversation_row.get("updated_at") or conversation_row.get("last_message_at") or conversation_row.get("created_at")),
+                "status": str(conversation_row.get("status") or ""),
+                "vehicle": vehicle_labels.get(int(conversation_row.get("vehicle_id") or 0), "") or _extract_vehicle_label(title_text),
+                "vehicle_id": conversation_row.get("vehicle_id"),
                 "type": "conversation",
                 "source": "web",
-                "sources": embedded_links or [],
+                "sources": [],
                 "videos": [],
                 "parser_used": False,
                 "deep_search_used": False,
-                "created_at": row.get("updated_at") or row.get("last_message_at") or row.get("created_at") or "",
+                "created_at": conversation_row.get("updated_at") or conversation_row.get("last_message_at") or conversation_row.get("created_at") or "",
                 "message_count": len(conversation_messages),
-            }
-        )
-
-    for request in diagnostic_rows:
-        cid = int(request.get("conversation_id") or 0)
-        conversation_row = conversation_by_id.get(cid, {})
-        question_text = str(request.get("question") or "").strip()
-        answer_text, embedded_links = _clean_case_answer(str(request.get("answer") or ""))
-        answer_text = _clean_text(answer_text, max_len=2600)
-        vehicle_label = (
-            vehicle_labels.get(int(request.get("vehicle_id") or 0), "")
-            or vehicle_labels.get(int(conversation_row.get("vehicle_id") or 0), "")
-            or _extract_vehicle_label(question_text)
-        )
-        items.append(
-            {
-                "id": request.get("id"),
-                "conversation_id": cid,
-                "question": question_text,
-                "answer": answer_text,
-                "date": _format_created_at(request.get("created_at") or conversation_row.get("updated_at") or conversation_row.get("created_at")),
-                "status": str(request.get("status") or conversation_row.get("status") or ""),
-                "vehicle": vehicle_label,
-                "vehicle_id": request.get("vehicle_id") or conversation_row.get("vehicle_id"),
-                "type": str(request.get("request_type") or "conversation"),
-                "source": "web",
-                "sources": request.get("sources") or embedded_links or [],
-                "videos": request.get("videos") or [],
-                "parser_used": bool(request.get("parser_used")),
-                "deep_search_used": bool(request.get("deep_search_used")),
-                "created_at": request.get("created_at") or "",
-                "message_count": len(messages_by_conversation.get(cid, [])),
             }
         )
 

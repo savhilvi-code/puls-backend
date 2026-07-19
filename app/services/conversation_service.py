@@ -153,12 +153,14 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
         client.table("messages")
         .select("role,message_text,created_at")
         .eq("conversation_id", conversation_id)
-        .order("created_at", desc=False)
+        .order("created_at", desc=True)
         .limit(12)
         .execute()
     )
     if not message_rows:
         return {}
+
+    message_rows.reverse()
 
     last_assistant_text = ""
     last_user_text = ""
