@@ -23,3 +23,4 @@ npm-debug.log*
 *.db
 *.zip
 cardiagnostic-ai-github/
+private_docs_local/

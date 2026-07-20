@@ -1,24 +1,23 @@
 # Codex Rules
 
-- Перед любыми изменениями прочитать `ARCHITECTURE.md`.
-- Перед изменениями проверить `TASK_LOG.md`.
-- Не менять рабочую логику без объяснения.
-- Не трогать frontend, если задача про backend.
-- Не трогать backend, если задача про frontend.
-- Не удалять существующие функции без причины.
-- Все изменения делать маленькими шагами.
-- После правки объяснять, какие файлы изменены и зачем.
-- Если задача непонятна, сначала задать вопрос.
-- Не делать массовый рефакторинг без отдельного разрешения.
+- Read `ARCHITECTURE.md` before making structural backend changes.
+- Check `TASK_LOG.md` before starting work so recent project context is not missed.
+- Avoid changing working product logic without a clear reason.
+- Make changes in small, reviewable steps.
+- After changes, explain which files were touched and why.
+- If a task is unclear, clarify it before making risky edits.
+- Avoid large refactors unless they are explicitly requested.
 
-## Обязательная фиксация изменений в двух репозиториях
+## Documentation And Repository Hygiene
 
-- Проект состоит из двух отдельных репозиториев: Backend `puls-backend` и Frontend `cardiagnostic-ai`.
-- Перед началом работы нужно явно определить, какой репозиторий затрагивается задачей.
-- Если меняется только Backend, обязательно обновить `TASK_LOG.md`, при необходимости `ARCHITECTURE.md`, и сделать отдельный commit/push в Backend.
-- Если меняется только Frontend, обязательно обновить `FRONTEND_TASK_LOG.md`, при необходимости `ARCHITECTURE_FRONTEND.md`, и сделать отдельный commit/push в Frontend.
-- Если задача затрагивает оба репозитория, нельзя считать её завершённой после правок только в одном. Нужно обновить оба task log, при необходимости оба architecture-файла, и сделать отдельные commit/push для каждого репозитория.
-- Запись в `TASK_LOG.md` и `FRONTEND_TASK_LOG.md` должна содержать дату, краткое описание задачи, список изменённых файлов, затронутые API/таблицы/сервисы, проверки, ограничения и commit hash.
-- Перед завершением задачи нужно проверить: какие репозитории менялись, обновлены ли нужные task log, сделаны ли commit/push, и не осталось ли незакоммиченных изменений.
-- Если один из репозиториев не требовал правок, это нужно явно указать в финальном отчёте.
-- Задача не считается завершённой, если не обновлён нужный `TASK_LOG`, изменения не закоммичены, не сделан push или нужные правки внесены только в один из двух репозиториев.
+- Determine whether a task affects Backend, Frontend, or both before making changes.
+- Keep the relevant task log up to date when project documentation or implementation changes.
+- Separate public-facing documentation from private operational notes when needed.
+- Verify that local-only documentation and temporary files are not unintentionally prepared for publication.
+
+## Completion Checklist
+
+- Confirm which repository was changed.
+- Confirm whether documentation also needed updating.
+- Check for unintended local changes before finishing.
+- Do not treat work as complete until the result has been reviewed in the local workspace.

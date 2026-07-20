@@ -2,60 +2,49 @@
 
 ## 2026-07-03
 
-- Создана система документации для Codex.
-- Добавлены ARCHITECTURE.md, CODEX_RULES.md, TASK_LOG.md.
-- Добавлен scripts/generate_architecture.py для обновления карты проекта.
-- Удален Telegram-транспорт из backend: убраны router/service, поля telegram_id/chat_id из входных схем, user-схем и Supabase user lookup.
-- Обновлены PROJECT_OVERVIEW.md и ARCHITECTURE.md под web-only поток без Telegram.
-- Добавлен db/remove_telegram.sql для очистки Telegram-only данных и удаления telegram_id из существующей Supabase.
-- Добавлен db/puls_integration.sql для web-first интеграции Supabase: conversations, messages, parser_runs, user_feedback, solved_cases, video_library, vehicle_service_logs и недостающие поля лимитов.
-- ChatResponse расширен полем quota, бесплатный лимит Parser/Deep Search установлен на 10 запросов.
-- Добавлен app/services/puls_data_service.py: backend теперь создает активные conversations, пишет messages, diagnostic_requests, parser_runs, video_library, user_feedback и solved_cases.
-- Исправлено списание лимита: kb_match больше не расходует Parser/Deep Search лимит.
-- Добавлен db/clean_test_data.sql для ручной очистки тестовой Supabase: удаляет пользователей, связанные user-owned данные и содержит проверочные запросы на пустую users и orphan-записи.
-- Добавлен app/services/decision_engine.py как единый PULS Decision Engine: `/chat` стал тонким router-слоем, а backend централизованно решает vehicle context, knowledge_cases/history lookup, Parser, Deep Search, quota и feedback flow.
-- Расширен app/services/puls_data_service.py: добавлены поиск автомобиля пользователя, поиск последнего диагностического запроса и создание solved_case из последнего успешного диагностического ответа.
-- 2026-07-04: Diagnosed empty Supabase writes. The current backend key is publishable/anon and fails inserts under RLS. Backend now prefers `SUPABASE_SERVICE_ROLE_KEY`, `/health` exposes Supabase diagnostics, and persistence/parser failures are logged for Render troubleshooting.
-- 2026-07-04: Extended Supabase secret-key detection to support `SUPABASE_SECRET_KEY` and `SUPABASE_SERVICE_KEY`; `/health` now reports Supabase env variable names without exposing values.
-- 2026-07-04: Added `/health.supabase.service_role_present` to explicitly confirm whether Render exposes `SUPABASE_SERVICE_ROLE_KEY` to the running backend.
-- 2026-07-04: Fixed feedback classification so `not helped` is stored as `not_helped`, and normalized embedded JSON from Parser/Deep Search before formatting answers.
-- 2026-07-04: Added knowledge/history answer sanitizing so old saved cases with embedded JSON are cleaned before being returned from the internal knowledge base.
-- 2026-07-04: Strengthened knowledge answer sanitizing with JSON-like fallback extraction for old malformed cases that cannot be parsed as strict JSON.
-- 2026-07-04: Applied knowledge answer cleanup inside Decision Engine KB-match response path to prevent old malformed knowledge cases from reaching chat output.
-- 2026-07-05: Added backend `/api/vehicles` CRUD for user-owned vehicle cards and connected it to Supabase `vehicles`.
-- 2026-07-05: Hardened Decision Engine vehicle context so explicitly mentioned cars override the previous context, history passed to Parser is filtered by active vehicle, and Toyota/1G-GZE requests cannot match old Nissan/SR20VET knowledge.
-- 2026-07-05: Changed feedback persistence so `helped/not helped` messages are stored in `user_feedback` and do not become separate diagnostic request questions; Deep Search rows keep the original symptom.
-- 2026-07-05: Saved brand/model/year/engine snapshots into `solved_cases` so shared successful cases remain useful after a user deletes a personal vehicle card.
-- 2026-07-05: Cleaned history output by trimming malformed embedded JSON/citations and returning readable vehicle labels instead of raw `vehicle_id` values.
-- 2026-07-06: Tightened parser answer sanitizing for component-specific searches. Backend now rejects embedded JSON / search-trace text as `parser_summary`, keeps turbo-focused link filtering, and Decision Engine formats structured parser results even when the raw summary is blank so replies do not fall back to generic warm-engine diagnostics.
-- 2026-07-06: Reworked backend persistence around `subscriptions`, `conversations/messages`, `diagnostic_requests`, `parser_runs`, `user_feedback`, `solved_cases` and `media_files`. `/chat` no longer spends quota from `users.requests_left`, no longer persists runtime chat state in `users.car_info` / `users.conversation_history`, creates `knowledge_cases` only after confirmed `helped`, and keeps explicit "other car" requests detached from the saved profile vehicle.
-- 2026-07-06: Fixed cross-car persistence for feedback and shared knowledge. Follow-up/helped messages now keep the last diagnostic car context instead of rebinding to the profile vehicle, `diagnostic_requests` persist `brand/model/year/engine` snapshots, and knowledge lookup now searches both `knowledge_cases` and confirmed `solved_cases` before spending parser quota.
-- 2026-07-17: Connected the active "My car" frontend flow to backend `/api/vehicles` so saved vehicles and `photo_url` persist in Supabase instead of living only in localStorage. The car photo card now hides the attach label after upload, shows a dropdown for replace/delete actions, clears local service records when a vehicle is removed, and keeps the new UI strings translated for both Russian and English.
-- 2026-07-17: Extended backend vehicle payloads so technical specification fields (displacement, power, torque, engine type, cylinders, emissions, tank) round-trip through `/api/vehicles`. For simpler live debugging, spec values are persisted safely through the existing `vehicles.notes` metadata envelope even before the optional SQL schema update is applied.
-- 2026-07-17: Updated `db/schema.sql`, `db/puls_integration.sql`, and `db/puls_supabase_alignment.sql` with optional explicit `vehicles` columns for technical specs so the database structure can be normalized later without changing the frontend flow.
-- 2026-07-17: Hardened backend `/api/vehicles` create logic for the debug flow. Empty vehicle creates are now rejected with `400`, repeated `POST` calls with the same VIN reuse the existing vehicle instead of inserting a duplicate, and repeated creates with the same `brand/model/year/engine` signature also collapse into a single vehicle row for that user.
-- 2026-07-17: Added backend `POST /api/vehicles/enrich` plus `app/services/vehicle_enrichment_service.py`. PULS can now use the model with web search to verify missing vehicle fields, normalize the result into the current car draft, and attach a representative car photo URL by VIN or by `brand/model/year` query before the user explicitly saves the vehicle.
-- 2026-07-18: Reverted the later experimental VIN/JDM lookup changes after they degraded stable decoding for existing cars. Backend was returned to the post-`77ac448` state and the live frontend VIN flow was restored to the earlier baseline before adding a new provider.
-- 2026-07-18: Started a safer JDM lookup plan based on real provider APIs instead of free-form generation. Researched `CarJam Japan Lookup` for Japanese chassis/frame numbers and `vindecoder.pl` for broader VIN decoding, with the immediate implementation focused on adding a deterministic JDM chassis provider path first.
-- 2026-07-18: Added a local JDM chassis provider as an additional backend fallback before the model-based enrichment step. It uses `data/jdm_chassis_codes.json` for known short Japanese body numbers such as `PNT30`, `E11`, `NZE124`, and `GS131`, so these cases no longer depend on LLM guesses.
-- 2026-07-19: Fixed active-conversation context lookup to read the latest `messages` window instead of the oldest rows in the conversation. This restores short service follow-ups such as `двс` and `двигатель sr20vet`, so they continue the current oil/fluid clarification instead of falling into the generic fallback.
-- 2026-07-19: Rebuilt `/api/history` around saved `messages` pairs (`user -> assistant`) with diagnostic-request enrichment. Clarification replies and ordinary dialog answers now appear in request history as real question/answer entries even inside conversations that already contain parser, knowledge-base, or deep-search rows.
-- 2026-07-19: Fixed service-advice case persistence so the final oil/fluid answer is saved under the original base question instead of a follow-up detail like climate or viscosity. Active service flows now keep the seed query for parser persistence, prepend a short practical recommendation at the top of the answer, and history/journal entries prefer the enriched `diagnostic_request` question/answer/sources when a matched backend case exists.
-- 2026-07-19: Fixed service-detail continuation after short follow-up context such as `Грузия`. Backend now keeps the original service seed query from the active conversation and converts detail replies after the engine/fluid clarification prompt into a real search flow instead of falling back to `Опишите проблему`.
-- 2026-07-19: Fixed backend `/api/history` aggregation so request history is returned per `diagnostic_request` instead of collapsing to only the latest request per conversation. This restores missing request-history rows in the frontend and allows solved cases with `status=solved` to appear again in the journal/work-cases view, while still keeping a fallback entry for plain text conversations without diagnostic rows.
-- 2026-07-19: Hardened backend dialog routing against context contamination from the previous diagnostic symptom. Service/consumable questions such as oil or fluid selection now stop before Deep Search and ask a targeted clarification instead of reusing the old parser/deep-search symptom, preventing unrelated turbo/fault context from leaking into a new request.
-- 2026-07-19: Extended backend clarification continuity for service-fluid dialogs. Short follow-up replies such as `для двс` now reuse the immediately preceding service-selection prompt from the active conversation messages, so PULS continues the oil/fluid thread instead of dropping into the generic `опишите проблему` fallback.
-- 2026-07-19: Corrected service-flow vehicle priority for follow-up details such as climate or region. If the original oil/fluid question explicitly names another car, backend now keeps that seed vehicle through the clarification chain (`engine` -> `Novosibirsk`) and does not let an older active/profile vehicle leak back into the answer. If no other car is named, the latest dialog vehicle or the saved profile vehicle still remains the default context.
-- 2026-07-19: Consolidated Supabase schema and persistence around one source of truth. Added `db/puls_production_schema.sql` as the only canonical production schema, removed the older duplicate SQL variants, extracted shared link/video normalization into `app/services/link_service.py`, and rewired duplicate persistence helpers in `puls_data_service.py` to delegate to the narrower conversation, diagnostic, parser-run, and feedback services instead of maintaining parallel write logic.
-- 2026-07-19: Completed the live Supabase schema cleanup. Verified `messages`, `parser_runs`, and `user_feedback` against the production schema, confirmed `service_history` was empty in production, removed the legacy table from live Supabase, and updated `db/clean_test_data.sql` so local cleanup scripts no longer reference the deleted table.
-- 2026-07-19: Added explicit production page-to-table architecture rules. Documented that `vehicles` remains the only source of truth for user-owned cars, `vehicle_profiles` is catalog/reference only, `solved_cases` is the personal completed-case layer, `knowledge_cases` is the promoted shared layer, `media_files` stores all found materials, and `video_library` stores only the personal video subset. Also documented the current page matrix so backend-backed surfaces are separated from demo/static surfaces.
-- 2026-07-19: Strengthened the persistence chain around shared knowledge and personal video shelves. Backend now writes `knowledge_events` whenever confirmed feedback promotes or refreshes a `knowledge_case`, and parser/deep-search link extraction now deduplicates and persists video links into `video_library` by `user_id + url` instead of leaving the personal video shelf empty.
-- 2026-07-19: Hardened service-fluid clarification routing after live-site regression reports. Clarification chains such as `Toyota Crown -> АКПП -> обычный автомат` now stay inside the service branch instead of dropping into a stale Nissan engine-oil fallback, and the vehicle-correction/service-fallback branch flow was re-indented so it no longer breaks around `не про ту машину` feedback.
-- 2026-07-19: Fixed service-fluid follow-up routing for transmission details. Replies such as `обычный автомат` now keep the active service target as `АКПП/ATF`, build a transmission-specific parser query, stop prepending a hardcoded engine-oil brief, and no longer fall back into unrelated warm-engine/turbo diagnostics from the previous car context.
-- 2026-07-19: Added two explicit Supabase reset scripts for recovery from polluted runtime/knowledge state. `db/reset_runtime_and_learning_keep_accounts.sql` wipes conversations, diagnostic artifacts, solved/shared knowledge, media, DTC, and service logs while preserving users, subscriptions, payments, and vehicles. `db/reset_everything_full.sql` performs a full public-data wipe including users, vehicles, subscriptions, payments, and shared knowledge for cases where the entire project state must be rebuilt from zero.
-- 2026-07-19: Updated backend workflow documentation in `CODEX_RULES.md` with a mandatory two-repository checklist. The rules now explicitly require deciding whether a task touches Backend, Frontend, or both, updating the correct task logs, and not calling the work complete before commit/push and clean git status are verified. Tested by reviewing the updated documentation locally. Frontend changes were not required.
-- 2026-07-19: Documented the completed service-flow stabilization work for Backend. Changed `app/services/decision_engine.py`, `app/services/dialog_state_service.py`, `app/services/user_service.py`, `CODEX_RULES.md`, and `TASK_LOG.md`. Fixed service-dialog state retention so oil/fluid requests now keep the active vehicle, service target, and short follow-up replies like `АКПП` or `обычный автомат` without falling into unrelated generic diagnostics. Also blocked service questions from being promoted into `solved_cases` / `knowledge_cases` through the normal confirmed-case path. Touched services and tables/routes: `decision_engine`, `dialog_state_service`, `user_service`, `conversations/messages`, `diagnostic_requests`, `solved_cases`, `knowledge_cases`, and `/chat`. Tested with `python -m py_compile app/services/decision_engine.py app/services/dialog_state_service.py app/services/user_service.py` plus live manual verification on the deployed site; the user confirmed the scenario now works. Remaining limitation: unrelated local changes still exist outside this task in `github_upload_supabase_auth/*`, `car-diagnostic-api/`, and `chrome-profile-mobile/`. Backend commit hash: `4a96750`.
-- 2026-07-20: Added MVP support intake for PULS. Created `app/routers/support.py`, `app/services/support_service.py`, `db/support_requests.sql`, and wired `app/main.py` to expose `POST /api/support`. The new backend flow accepts support form submissions from guests and signed-in users, validates up to 3 image attachments (`jpg/jpeg/png/webp`, 5 MB each), uploads them to Supabase Storage bucket `support-attachments`, and writes `support_requests` rows with `user_id`, editable `email`, `subject`, `message`, JSON-encoded `attachment_url`, `status=new`, and `created_at`. Updated `ARCHITECTURE.md` and `TASK_LOG.md`. Tested with `python -m py_compile app/main.py app/routers/support.py app/services/support_service.py`. Known limitation: automatic email forwarding to `pulscar.ai@gmail.com` is not sent yet; the MVP persists requests so forwarding can be added later without changing the table.
-- 2026-07-20: Fixed the failed Render deploy for the new support endpoint. Root cause: FastAPI `Form`/`File` handling requires `python-multipart`, and without it backend startup crashed before routing was initialized. Added `python-multipart>=0.0.9` to `requirements.txt` and verified the local startup error message reproduced this exact missing dependency. Frontend changes were not required for this fix.
-- 2026-07-20: Extended support intake with real email forwarding. Updated `app/services/support_service.py` and `app/routers/support.py` so each saved `support_request` is also sent to support email via SMTP with the original requester email in `Reply-To`, the message body, public image URLs, inline image previews, and the uploaded files as actual email attachments. The support row status now moves to `emailed` on success or `email_failed` if SMTP delivery fails after persistence. Updated `ARCHITECTURE.md` and `TASK_LOG.md`. Tested with `python -m py_compile app/routers/support.py app/services/support_service.py`. Required runtime config: Render must expose `SUPPORT_SMTP_PASSWORD`; optional overrides are `SUPPORT_SMTP_USERNAME`, `SUPPORT_SMTP_HOST`, `SUPPORT_SMTP_PORT`, `SUPPORT_EMAIL_FROM`, `SUPPORT_EMAIL_TO`, and `SUPPORT_SMTP_USE_TLS`.
-- 2026-07-20: Completed live verification of the support-email flow after SMTP setup in Render. The deployed backend now saves support requests to `support_requests`, uploads images to Supabase Storage `support-attachments`, and successfully forwards the message to `pulscar.ai@gmail.com` with text, public image URLs, inline image preview, and the image file attached. Verified manually by the user on the live site after setting Gmail App Password in Render.
+- Established the backend project documentation baseline.
+- Standardized the repository around the web-first PULS backend flow.
+- Added high-level project structure and maintenance documentation.
+
+## 2026-07-04
+
+- Improved backend persistence reliability and deployment diagnostics.
+- Strengthened response formatting and knowledge-handling quality.
+
+## 2026-07-05
+
+- Added backend support for user vehicle management.
+- Improved vehicle-aware handling for saved cases and user history.
+
+## 2026-07-06
+
+- Refined quota handling, persistence boundaries, and backend chat flow integration.
+- Continued cleanup of legacy runtime assumptions in the web backend.
+
+## 2026-07-17
+
+- Expanded the vehicle profile workflow and related backend support for richer car data.
+- Added backend support for internet-assisted vehicle enrichment before explicit save.
+
+## 2026-07-18
+
+- Improved Japanese chassis and VIN-related enrichment strategy.
+- Stabilized the vehicle identification flow after experimentation.
+
+## 2026-07-19
+
+- Improved history handling, service-flow continuity, and backend data consistency.
+- Consolidated schema and persistence documentation around the active production direction.
+- Continued refinement of shared knowledge handling and user-facing diagnostic flows.
+
+## 2026-07-20
+
+- Added support request intake for PULS, including file attachments and backend persistence.
+- Completed SMTP-based support email forwarding for support submissions.
+- Verified the live support submission flow after production configuration.
+
+## Summary
+
+- The backend has evolved from an initial web migration into a production-oriented FastAPI service.
+- Major project milestones include vehicle management, history persistence, support intake, schema consolidation, and operational stabilization.
+- Detailed internal implementation notes are preserved outside the public-facing documentation set.
