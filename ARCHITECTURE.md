@@ -241,3 +241,6 @@ The current production rule is to keep distinct tables for distinct product surf
 - `media_files` stores all found links, documents, and materials tied to a diagnostic request.
 - `video_library` stores only the personal video subset of the broader `media_files`/search output.
 - Pages that are still demo/static must not be described in UI copy as if they already reflect production persistence.
+- `app/services/support_service.py`: support intake service for `POST /api/support`; validates uploaded images, stores them in Supabase Storage `support-attachments`, and writes `support_requests` rows for future support analytics and email forwarding.
+- `app/routers/support.py`: guest/auth support endpoint for the Settings modal. Accepts `subject`, `message`, editable `email`, optional `auth_user_id`, and up to 3 images.
+- `db/support_requests.sql`: bootstrap SQL for the `support_requests` table used by the MVP support flow.
