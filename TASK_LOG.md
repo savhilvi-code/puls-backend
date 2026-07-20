@@ -42,6 +42,7 @@
 - Added support request intake for PULS, including file attachments and backend persistence.
 - Completed SMTP-based support email forwarding for support submissions.
 - Verified the live support submission flow after production configuration.
+- Polished the public backend repository presentation by simplifying public-facing documentation and replacing the backend README with a production-oriented overview, without changing runtime code.
 
 ## Summary
 

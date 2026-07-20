@@ -1,41 +1,41 @@
-# PULS car diagnostic backend
+# PULS Backend
 
-FastAPI scaffold extracted from the n8n workflow export.
-The backend now mirrors the working n8n flow for the website only:
-normalization, router, Supabase history, and parser/search via `PARSER_API_URL`.
+Production backend for the PULS automotive diagnostics platform.
 
-## Run
+PULS Backend powers the live application at [pulscar.co](https://pulscar.co) and provides the server-side foundation for conversational vehicle diagnostics, vehicle-aware context handling, request history, support intake, and validated repair case accumulation.
 
-1. Create `.env` from `.env.example` and fill the values.
-2. Install Python dependencies from `requirements.txt`.
-3. Start the API:
+## Technology
+
+- FastAPI
+- Python
+- Supabase / PostgreSQL
+- OpenAI models
+
+## MVP Capabilities
+
+- conversational automotive diagnostics
+- vehicle context
+- diagnostic history
+- validated repair case accumulation
+- parser and deep-search integration
+- support requests
+
+## Live Product
+
+- Website: [https://pulscar.co](https://pulscar.co)
+
+## Local Run
+
+1. Copy `.env.example` to a local `.env`.
+2. Fill in the required environment variables for your local environment.
+3. Install dependencies from `requirements.txt`.
+4. Start the API:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-## Render
-
-This project includes `render.yaml` for a Python web service. On Render, use the provided environment variables from `.env.example`, especially `PARSER_API_URL` for the cloud parser endpoint and `FRONTEND_API_URL=/chat` for the frontend integration point.
-
-## Structure
-
-- `app/main.py` - FastAPI app entrypoint.
-- `app/routers/chat.py` - `POST /chat` orchestration.
-- `app/routers/health.py` - `GET /health`.
-- `app/services/normalize_service.py` - input normalization for web requests.
-- `app/services/router_service.py` - message classification.
-- `app/services/user_service.py` - user lookup/update flow.
-- `app/services/kb_service.py` - knowledge base lookup/save stub.
-- `app/services/parser_engine.py` - cloud-first parser/search service with local fallback.
-- `app/services/parser_service.py` - adapter used by `/chat` and `/search`.
-- `app/routers/search.py` - `/search` and `/diagnose` endpoints backed by the embedded parser.
-- `app/services/openai_service.py` - OpenAI integration placeholder.
-- `app/database/supabase.py` - Supabase client and repository layer.
-- `app/schemas/*` - Pydantic models.
-- `app/utils/*` - language and formatting helpers.
-- `app/prompts/router_prompt.txt` - router prompt copied from the workflow.
-
 ## Notes
 
-This project keeps the main orchestration in FastAPI while preserving the parser/search flow from the old API service.
+- This repository contains the production backend for the public PULS web application.
+- Public documentation is intentionally high level and does not describe internal operational rules or private implementation details.
