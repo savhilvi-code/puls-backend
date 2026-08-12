@@ -1,7 +1,7 @@
 import re
 
 from app.schemas.chat import ChatResponse
-from app.services.conversation_service import get_latest_conversation_context
+from app.services.conversation_service import get_latest_conversation_context, _looks_like_service_query
 from app.services.dialog_state_service import _looks_like_diagnostic_intent, build_dialog_state
 from app.services.formatter_service import format_from_kb, format_technical_answer
 from app.services.kb_service import (
@@ -285,7 +285,9 @@ def _looks_like_service_advice_query(text: str) -> bool:
         "noise",
         "turbo",
     )
-    return any(term in lowered for term in service_terms) and not any(term in lowered for term in problem_terms)
+    return (any(term in lowered for term in service_terms) or _looks_like_service_query(text)) and not any(
+        term in lowered for term in problem_terms
+    )
 
 
 def _service_advice_clarification(*, language: str, active_car: str) -> str:
@@ -1170,7 +1172,12 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     matched_case_answer = ""
     matched_case_links = []
     matched_case_is_placeholder = False
-    if state.should_search and not state.should_deep_search and not _looks_like_info_followup(normalized.text):
+    if (
+        state.should_search
+        and not state.should_deep_search
+        and not _looks_like_info_followup(normalized.text)
+        and not service_detail_context
+    ):
         matched_case = await find_matching_case(state, decision)
         matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
         matched_case_links = (matched_case or {}).get("links", [])
