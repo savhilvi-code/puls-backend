@@ -256,6 +256,7 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
                 "need_car_info": False,
                 "ready_to_search": False,
                 "deep_search": False,
+                "response": "",
             }
         )
 
