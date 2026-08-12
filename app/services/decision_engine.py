@@ -2,7 +2,7 @@ import re
 
 from app.schemas.chat import ChatResponse
 from app.services.conversation_service import get_latest_conversation_context
-from app.services.dialog_state_service import build_dialog_state
+from app.services.dialog_state_service import _looks_like_diagnostic_intent, build_dialog_state
 from app.services.formatter_service import format_from_kb, format_technical_answer
 from app.services.kb_service import (
     _clean_case_answer,
