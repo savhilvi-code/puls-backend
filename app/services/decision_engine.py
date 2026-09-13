@@ -248,6 +248,372 @@ def _looks_like_info_followup(text: str) -> bool:
     return any(phrase in lowered for phrase in phrases)
 
 
+def _word_count(text: str) -> int:
+    return len([part for part in re.split(r"\s+", str(text or "").strip()) if part])
+
+
+def _looks_like_source_question(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    source_terms = (
+        "where did",
+        "source",
+        "sources",
+        "found it",
+        "why do you think",
+        "evidence",
+        "proof",
+        "\u043e\u0442\u043a\u0443\u0434\u0430",
+        "\u0433\u0434\u0435 \u0442\u044b",
+        "\u0433\u0434\u0435 \u043d\u0430\u0448",
+        "\u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a",
+        "\u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438",
+        "\u043f\u043e\u0447\u0435\u043c\u0443 \u0442\u044b \u0442\u0430\u043a",
+        "\u043f\u043e\u0447\u0435\u043c\u0443 \u0442\u0430\u043a",
+        "\u043d\u0430 \u0447\u0435\u043c \u043e\u0441\u043d\u043e\u0432",
+    )
+    return any(term in lowered for term in source_terms)
+
+
+def _looks_like_unable_to_answer(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    unable_terms = (
+        "i do not know",
+        "i don't know",
+        "dont know",
+        "no idea",
+        "unknown",
+        "not sure",
+        "no manual",
+        "\u043d\u0435 \u0437\u043d\u0430\u044e",
+        "\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e",
+        "\u043d\u0435\u0442 \u043c\u0430\u043d\u0443\u0430\u043b",
+        "\u043c\u0430\u043d\u0443\u0430\u043b\u0430 \u043d\u0435\u0442",
+        "\u043d\u0435 \u043f\u043e\u043c\u043d\u044e",
+    )
+    return any(term in lowered for term in unable_terms)
+
+
+def _contains_case_detail(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    detail_terms = (
+        "cold",
+        "hot",
+        "accelerat",
+        "idle",
+        "rpm",
+        "speed",
+        "load",
+        "intermittent",
+        "constant",
+        "after",
+        "before",
+        "replaced",
+        "changed",
+        "repaired",
+        "code",
+        "dtc",
+        "obd",
+        "check engine",
+        "warning",
+        "smell",
+        "vibration",
+        "sound",
+        "noise",
+        "climate",
+        "city",
+        "country",
+        "\u0445\u043e\u043b\u043e\u0434",
+        "\u0433\u043e\u0440\u044f\u0447",
+        "\u0440\u0430\u0437\u0433\u043e\u043d",
+        "\u043f\u0440\u043e\u0433\u0440\u0435\u0442",
+        "\u0445\u043e\u043b\u043e\u0441\u0442",
+        "\u043e\u0431\u043e\u0440\u043e\u0442",
+        "\u0441\u043a\u043e\u0440\u043e\u0441\u0442",
+        "\u043d\u0430\u0433\u0440\u0443\u0437",
+        "\u043f\u043e\u0441\u043b\u0435",
+        "\u0434\u043e \u044d\u0442\u043e\u0433\u043e",
+        "\u0437\u0430\u043c\u0435\u043d",
+        "\u0440\u0435\u043c\u043e\u043d\u0442",
+        "\u043e\u0448\u0438\u0431",
+        "\u0447\u0435\u043a",
+        "\u0437\u0430\u043f\u0430\u0445",
+        "\u0432\u0438\u0431\u0440\u0430\u0446",
+        "\u0437\u0432\u0443\u043a",
+        "\u0448\u0443\u043c",
+        "\u043a\u043b\u0438\u043c\u0430\u0442",
+        "\u0433\u043e\u0440\u043e\u0434",
+        "\u0441\u0442\u0440\u0430\u043d",
+    )
+    if any(term in lowered for term in detail_terms):
+        return True
+    if re.search(r"\b(p0\d{3}|u0\d{3}|b0\d{3}|c0\d{3})\b", lowered):
+        return True
+    if re.search(r"\b\d+(?:[.,]\d+)?\s?(?:km/h|км/ч|rpm|об|w-\d{2}|c|°c)\b", lowered, re.IGNORECASE):
+        return True
+    return False
+
+
+def _is_short_contextual_reply(text: str) -> bool:
+    if not str(text or "").strip():
+        return False
+    if _extract_active_car_from_text(text):
+        return False
+    return _word_count(text) <= 10
+
+
+def _assistant_asked_for_more_context(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    prompts = (
+        "please provide",
+        "please specify",
+        "please tell",
+        "when does",
+        "does it happen",
+        "what happened",
+        "any warning",
+        "send the",
+        "\u0443\u043a\u0430\u0436\u0438\u0442\u0435",
+        "\u0443\u0442\u043e\u0447\u043d\u0438\u0442\u0435",
+        "\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435",
+        "\u043a\u043e\u0433\u0434\u0430 \u043f\u0440\u043e\u044f\u0432",
+        "\u0435\u0441\u0442\u044c \u043b\u0438",
+        "\u043f\u0440\u0438\u0448\u043b\u0438\u0442\u0435",
+    )
+    return any(prompt in lowered for prompt in prompts)
+
+
+def _clarification_depth(latest_context: dict | None) -> int:
+    messages = (latest_context or {}).get("recent_messages") or []
+    if not isinstance(messages, list):
+        return 0
+    depth = 0
+    for item in reversed(messages):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").lower()
+        text = str(item.get("text") or "")
+        if role == "assistant" and _assistant_asked_for_more_context(text):
+            depth += 1
+            continue
+        if role == "assistant" and not _assistant_asked_for_more_context(text):
+            break
+    return depth
+
+
+def _current_case_seed(*, latest_context: dict | None, history: str, state) -> str:
+    latest_context = latest_context or {}
+    recent_messages = latest_context.get("recent_messages") or []
+    if isinstance(recent_messages, list):
+        user_texts = [
+            str(item.get("text") or "").strip()
+            for item in recent_messages
+            if isinstance(item, dict)
+            and str(item.get("role") or "").strip().lower() == "user"
+            and str(item.get("text") or "").strip()
+        ]
+        anchor_index = -1
+        for index, text in enumerate(user_texts):
+            if _looks_like_source_question(text) or _looks_like_info_followup(text):
+                continue
+            if (
+                _extract_active_car_from_text(text)
+                or _looks_like_service_advice_query(text)
+                or _looks_like_diagnostic_intent(text)
+                or _contains_case_detail(text)
+                or _word_count(text) >= 3
+            ):
+                anchor_index = index
+                break
+        if anchor_index >= 0:
+            anchor = user_texts[anchor_index]
+            facts = [
+                text
+                for text in user_texts[anchor_index + 1 :]
+                if text
+                and text != anchor
+                and not _looks_like_source_question(text)
+                and not _looks_like_info_followup(text)
+            ]
+            if facts:
+                return f"{anchor}. Known additional facts: " + "; ".join(facts[-4:])
+            return anchor
+
+    for value in (
+        latest_context.get("latest_service_query"),
+        latest_context.get("last_user_text"),
+        getattr(state, "previous_symptom", ""),
+        _extract_last_search_symptom(history),
+    ):
+        value = str(value or "").strip()
+        if value and not _looks_like_info_followup(value):
+            return value
+    return ""
+
+
+def _looks_like_current_case_continuation(*, text: str, latest_context: dict | None, state) -> bool:
+    if getattr(state, "is_greeting", False) or getattr(state, "is_feedback_helped", False) or getattr(state, "is_feedback_not_helped", False):
+        return False
+    if _looks_like_source_question(text):
+        return True
+    latest_context = latest_context or {}
+    last_assistant = str(latest_context.get("last_assistant_text") or "")
+    has_case = bool(
+        latest_context.get("last_user_text")
+        or latest_context.get("latest_service_query")
+        or getattr(state, "previous_symptom", "")
+    )
+    if not has_case:
+        return False
+    if _assistant_asked_for_more_context(last_assistant):
+        return True
+    return _is_short_contextual_reply(text) and not _looks_like_diagnostic_intent(text)
+
+
+def _should_ask_contextual_clarification(*, state, normalized, latest_context: dict | None, seed_symptom: str) -> bool:
+    if (
+        state.is_greeting
+        or state.is_feedback_helped
+        or state.is_feedback_not_helped
+        or state.active_service_flow
+        or _looks_like_source_question(normalized.text)
+        or _looks_like_info_followup(normalized.text)
+    ):
+        return False
+    if not state.should_search or not state.active_car:
+        return False
+    if _looks_like_service_advice_query(normalized.text):
+        return False
+
+    text = str(normalized.text or "").strip()
+    seed = str(seed_symptom or "").strip()
+    depth = _clarification_depth(latest_context)
+    if _looks_like_unable_to_answer(text):
+        return False
+    if _word_count(text) >= 6 and not _looks_like_diagnostic_intent(text):
+        return False
+    if depth >= 2:
+        return False
+
+    combined = " ".join(part for part in (seed, text) if part).strip()
+    detailed = _word_count(combined) >= 14 and _contains_case_detail(combined)
+    if detailed:
+        return False
+    if _looks_like_current_case_continuation(text=text, latest_context=latest_context, state=state):
+        return depth < 2 and not detailed
+    return _word_count(text) < 10 or not _contains_case_detail(text)
+
+
+def _next_contextual_clarification(*, language: str, active_car: str, symptom: str) -> str:
+    if language == "ru":
+        car_part = f" \u043f\u043e {active_car}" if active_car else ""
+        if not _contains_case_detail(symptom):
+            return (
+                f"\u041f\u043e\u043d\u044f\u043b \u043a\u0435\u0439\u0441{car_part}. "
+                "\u0423\u0442\u043e\u0447\u043d\u0438\u0442\u0435 \u043e\u0434\u0438\u043d \u0441\u0430\u043c\u044b\u0439 \u0432\u0430\u0436\u043d\u044b\u0439 \u043c\u043e\u043c\u0435\u043d\u0442: "
+                "\u043a\u043e\u0433\u0434\u0430 \u044d\u0442\u043e \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f - \u043d\u0430 \u0445\u043e\u043b\u043e\u0434\u043d\u0443\u044e, "
+                "\u043d\u0430 \u0433\u043e\u0440\u044f\u0447\u0443\u044e, \u043d\u0430 \u0445\u043e\u043b\u043e\u0441\u0442\u044b\u0445, \u043f\u043e\u0434 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439 "
+                "\u0438\u043b\u0438 \u043f\u043e\u0441\u043b\u0435 \u043a\u0430\u043a\u043e\u0439-\u0442\u043e \u0437\u0430\u043c\u0435\u043d\u044b?"
+            )
+        return (
+            f"\u041f\u0440\u0438\u043d\u044f\u043b{car_part}. "
+            "\u0415\u0441\u0442\u044c \u043b\u0438 \u043e\u0448\u0438\u0431\u043a\u0438/DTC \u0438\u043b\u0438 \u0447\u0442\u043e-\u0442\u043e \u043c\u0435\u043d\u044f\u043b\u0438 "
+            "\u043f\u0435\u0440\u0435\u0434 \u0442\u0435\u043c, \u043a\u0430\u043a \u044d\u0442\u043e \u043d\u0430\u0447\u0430\u043b\u043e\u0441\u044c?"
+        )
+    car_part = f" on {active_car}" if active_car else ""
+    if not _contains_case_detail(symptom):
+        return (
+            f"Got the case{car_part}. What is the single most useful condition: "
+            "does it happen cold, hot, at idle, under load, or after a recent repair/replacement?"
+        )
+    return (
+        f"Understood{car_part}. Are there any DTC/warning lights, or did anything get repaired or replaced before it started?"
+    )
+
+
+def _parse_latest_evidence(history: str) -> dict:
+    blocks = [block.strip() for block in str(history or "").split("\n---\n") if block.strip()]
+    for block in reversed(blocks):
+        fields: dict[str, str] = {}
+        links: list[dict] = []
+        in_links = False
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.lower() == "links:":
+                in_links = True
+                continue
+            if in_links and line.startswith("- "):
+                body = line[2:].strip()
+                title, url = ("", body)
+                if ": " in body:
+                    title, url = body.split(": ", 1)
+                if url:
+                    links.append({"title": title.strip() or url.strip(), "url": url.strip(), "description": "", "type": "link"})
+                continue
+            if ":" in line:
+                key, value = line.split(":", 1)
+                fields[key.strip().lower()] = value.strip()
+        if fields.get("message_type") in {"parser", "kb_match", "followup_deep"} and (links or fields.get("assistant")):
+            return {"fields": fields, "links": links}
+    return {}
+
+
+def _stored_evidence_answer(*, language: str, history: str, question: str) -> tuple[str, list[dict]] | None:
+    evidence = _parse_latest_evidence(history)
+    if not evidence:
+        return None
+    fields = evidence.get("fields") or {}
+    links = evidence.get("links") or []
+    symptom = str(fields.get("symptom") or fields.get("user") or "").strip()
+    assistant = str(fields.get("assistant") or "").strip()
+    wants_reason = "why" in _normalize_phrase(question) or "\u043f\u043e\u0447\u0435\u043c\u0443" in _normalize_phrase(question)
+
+    if language == "ru":
+        parts = []
+        if symptom:
+            parts.append(f"\u042f \u043e\u043f\u0438\u0440\u0430\u044e\u0441\u044c \u043d\u0430 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043a\u0435\u0439\u0441: {symptom}.")
+        if wants_reason and assistant:
+            parts.append(f"\u041b\u043e\u0433\u0438\u043a\u0430 \u0442\u0430\u043a\u0430\u044f: {assistant[:900]}")
+        elif assistant:
+            parts.append("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435 \u0443\u0436\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u044b \u0432 \u044d\u0442\u043e\u043c \u043a\u0435\u0439\u0441\u0435.")
+        if links:
+            parts.append("\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438 \u0438\u0437 \u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0435\u0433\u043e \u043f\u043e\u0438\u0441\u043a\u0430: " + ", ".join((item.get("title") or item.get("url") or "").strip() for item in links[:4] if item.get("url")))
+        return "\n\n".join(part for part in parts if part).strip(), links
+
+    parts = []
+    if symptom:
+        parts.append(f"I am using the current stored case: {symptom}.")
+    if wants_reason and assistant:
+        parts.append(f"The reasoning came from the previous answer and evidence: {assistant[:900]}")
+    elif assistant:
+        parts.append("The evidence is already stored on this case, so I do not need to run a new search.")
+    if links:
+        parts.append("Sources from the previous search: " + ", ".join((item.get("title") or item.get("url") or "").strip() for item in links[:4] if item.get("url")))
+    return "\n\n".join(part for part in parts if part).strip(), links
+
+
+def _answer_repeats_latest_assistant(answer: str, latest_context: dict | None) -> bool:
+    latest = _normalize_phrase((latest_context or {}).get("last_assistant_text") or "")
+    current = _normalize_phrase(answer)
+    if not latest or not current:
+        return False
+    if current in latest or latest in current:
+        return True
+    shared = set(_word for _word in current.split() if len(_word) > 4).intersection(
+        _word for _word in latest.split() if len(_word) > 4
+    )
+    return len(shared) >= 18
+
+
+def _bind_conversation_vehicle(*, user_id: int | None, car_text: str) -> tuple[int | None, str]:
+    if not str(car_text or "").strip():
+        return None, ""
+    vehicle = resolve_user_vehicle(user_id=user_id, car_text=car_text)
+    label = _vehicle_label(vehicle)
+    return (vehicle.get("id") if vehicle else None), (label or str(car_text or "").strip())
+
+
 def _looks_like_service_advice_query(text: str) -> bool:
     lowered = _normalize_phrase(text)
     service_terms = (
@@ -909,18 +1275,22 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         normalized = normalized.model_copy(update={"car_info": mentioned_car})
 
     user = await get_or_create_user(normalized)
+    latest_context = get_latest_conversation_context(user_id=user.id)
+    conversation_car = str(latest_context.get("active_car") or "").strip()
+    initial_car_text = mentioned_car or conversation_car or normalized.car_info or user.car_info
     resolved_vehicle = resolve_user_vehicle(
         user_id=user.id,
-        car_text=mentioned_car or normalized.car_info or user.car_info,
+        car_text=initial_car_text,
     )
     vehicle_id = resolved_vehicle.get("id") if resolved_vehicle else None
     resolved_car_label = _vehicle_label(resolved_vehicle)
     if resolved_car_label:
         normalized = normalized.model_copy(update={"car_info": resolved_car_label})
+    elif initial_car_text:
+        normalized = normalized.model_copy(update={"car_info": initial_car_text})
 
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
-    latest_context = get_latest_conversation_context(user_id=user.id)
     service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
     service_seed_car = _extract_active_car_from_text(service_seed_query)
     latest_assistant_text = str(latest_context.get("last_assistant_text") or "")
@@ -949,18 +1319,55 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     state.active_service_flow = service_flow_active
     state.service_target = service_target
     state.service_subtype = service_subtype
+    current_case_seed = _current_case_seed(
+        latest_context=latest_context,
+        history=user.conversation_history or "",
+        state=state,
+    )
+    contextual_continuation = _looks_like_current_case_continuation(
+        text=normalized.text,
+        latest_context=latest_context,
+        state=state,
+    )
     if mentioned_car:
         state.active_car = mentioned_car
-    elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
-        state.active_car = resolved_car_label
     elif service_flow_active:
         remembered_car = (
             service_seed_car
-            or str(latest_context.get("active_car") or "").strip()
+            or conversation_car
             or state.active_car
         )
         if remembered_car:
             state.active_car = remembered_car
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=remembered_car)
+            vehicle_id = bound_vehicle_id
+            normalized = normalized.model_copy(update={"car_info": bound_label})
+            state.active_car = bound_label
+    elif contextual_continuation:
+        remembered_car = conversation_car
+        if remembered_car:
+            state.active_car = remembered_car
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=remembered_car)
+            vehicle_id = bound_vehicle_id
+            normalized = normalized.model_copy(update={"car_info": bound_label})
+            state.active_car = bound_label
+        if current_case_seed and not _looks_like_source_question(normalized.text):
+            state.previous_symptom = current_case_seed
+            state.current_symptom = (
+                f"{current_case_seed}. Additional user information: {normalized.text}"
+                if str(normalized.text or "").strip() and normalized.text.strip() != current_case_seed
+                else current_case_seed
+            )
+            state.needs_car_clarification = False
+            state.needs_problem_clarification = False
+            state.should_search = True
+    elif conversation_car:
+        bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=conversation_car)
+        vehicle_id = bound_vehicle_id
+        normalized = normalized.model_copy(update={"car_info": bound_label})
+        state.active_car = bound_label
+    elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
+        state.active_car = resolved_car_label
 
     if state.active_car and _should_clear_vehicle_binding(
         active_car=state.active_car,
@@ -1002,6 +1409,15 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         state.needs_car_clarification = False
         state.needs_problem_clarification = False
         state.should_search = True
+
+    contextual_clarification_needed = _should_ask_contextual_clarification(
+        state=state,
+        normalized=normalized,
+        latest_context=latest_context,
+        seed_symptom=current_case_seed or state.current_symptom,
+    )
+    if contextual_clarification_needed:
+        state.should_search = False
 
     if _looks_like_info_followup(normalized.text) and user.conversation_history:
         state.needs_car_clarification = False
@@ -1110,6 +1526,25 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         )
         return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
 
+    if contextual_clarification_needed:
+        answer_text = _next_contextual_clarification(
+            language=state.language,
+            active_car=state.active_car,
+            symptom=current_case_seed or state.current_symptom,
+        )
+        await update_user_after_response(
+            user,
+            normalized,
+            answer_text,
+            should_decrease_limit=False,
+            active_car=state.active_car,
+            symptom=current_case_seed or state.current_symptom,
+            message_type="clarification",
+            vehicle_id=vehicle_id,
+            force_new_conversation=bool(mentioned_car),
+        )
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
+
     if _looks_like_service_advice_query(normalized.text) and not state.is_feedback_helped and not state.is_feedback_not_helped:
         answer_text = _service_advice_clarification(
             language=state.language,
@@ -1181,6 +1616,29 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     elif not state.active_car:
         state.active_car = str(latest_context.get("active_car") or "").strip()
 
+    if _looks_like_source_question(normalized.text):
+        stored_evidence = _stored_evidence_answer(
+            language=state.language,
+            history=user.conversation_history or "",
+            question=normalized.text,
+        )
+        if stored_evidence is not None:
+            answer_text, evidence_links = stored_evidence
+            localized_links = await _localize_links(evidence_links, state.language)
+            await update_user_after_response(
+                user,
+                normalized,
+                answer_text,
+                should_decrease_limit=False,
+                active_car=state.active_car,
+                symptom=current_case_seed or state.current_symptom,
+                message_type="general",
+                links=localized_links,
+                vehicle_id=vehicle_id,
+                force_new_conversation=False,
+            )
+            return ChatResponse(answer=answer_text, links=localized_links, quota=_quota_payload(user))
+
     if state.needs_problem_clarification:
         answer_text = _fallback_diagnostic_prompt(state.language)
         await update_user_after_response(
@@ -1227,13 +1685,18 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     if state.is_feedback_not_helped:
         state.should_deep_search = True
         state.should_search = True
-        previous_search_symptom = _extract_last_search_symptom(user.conversation_history)
+        previous_search_symptom = current_case_seed or _extract_last_search_symptom(user.conversation_history)
         if previous_search_symptom:
             state.previous_symptom = previous_search_symptom
             state.current_symptom = previous_search_symptom
         elif not state.current_symptom and state.previous_symptom:
             state.current_symptom = state.previous_symptom
-        if not state.active_car and user.car_info:
+        if conversation_car and not mentioned_car:
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=conversation_car)
+            vehicle_id = bound_vehicle_id
+            normalized = normalized.model_copy(update={"car_info": bound_label})
+            state.active_car = bound_label
+        elif not state.active_car:
             state.active_car = user.car_info
 
     matched_case = None
@@ -1242,9 +1705,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     matched_case_is_placeholder = False
     if (
         state.should_search
-        and not state.should_deep_search
         and not _looks_like_info_followup(normalized.text)
-        and not service_detail_context
     ):
         matched_case = await find_matching_case(state, decision)
         matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
@@ -1258,8 +1719,14 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 "need more information",
             },
         )
+        if state.is_feedback_not_helped and _answer_repeats_latest_assistant(matched_case_answer, latest_context):
+            matched_case_is_placeholder = True
 
-        if (matched_case is None or not (matched_case_answer or matched_case_links) or matched_case_is_placeholder) and user.conversation_history:
+        if (
+            (matched_case is None or not (matched_case_answer or matched_case_links) or matched_case_is_placeholder)
+            and user.conversation_history
+            and not state.is_feedback_not_helped
+        ):
             matched_case = await find_matching_history_case(
                 history=user.conversation_history,
                 active_car=state.active_car or normalized.car_info or user.car_info,
@@ -1277,6 +1744,8 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                     "need more information",
                 },
             )
+            if state.is_feedback_not_helped and _answer_repeats_latest_assistant(matched_case_answer, latest_context):
+                matched_case_is_placeholder = True
 
         if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
             matched_case_answer, embedded_links = _clean_case_answer(matched_case_answer)

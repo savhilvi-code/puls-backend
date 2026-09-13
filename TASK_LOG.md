@@ -78,6 +78,31 @@
   evidence preservation, filtered `ChatResponse.links`, and the unchanged
   `/chat` response contract.
 
+## 2026-09-14
+
+- Refined the existing backend `/chat` conversational flow so short follow-up
+  answers are interpreted against the current conversation before parser/search
+  is considered. The change keeps the current vehicle/topic from recent
+  messages ahead of stale older history, asks one high-value clarification for
+  sparse cases, proceeds when the user cannot provide more detail, checks PULS
+  internal knowledge before external parser, preserves parser evidence for
+  negative feedback/deeper search, and answers source/why questions from stored
+  evidence without a new search. Changed `app/services/decision_engine.py`,
+  `app/services/conversation_service.py`, and added
+  `tests/test_conversational_context_flow.py`. No database schema change.
+  Verified with `python -m py_compile app\services\decision_engine.py
+  app\services\conversation_service.py tests\test_conversational_context_flow.py`
+  and `python -m unittest discover -s tests` after `pytest` was unavailable in
+  the local Python environment.
+- Follow-up fix on `conversational-context-flow`: moved recent conversation
+  context ahead of vehicle resolution so current-case vehicles beat older
+  `user.car_info`, strengthened current-topic reconstruction from recent
+  `messages`, allowed internal PULS knowledge/history checks before service
+  detail and negative-feedback parser paths, and added less-mocked regression
+  coverage for stale vehicle precedence, explicit vehicle switch, multi-turn
+  clarification suppression, KB-before-parser behavior, and evidence reuse.
+  Verified with direct conversational tests and the full unittest suite.
+
 ## Summary
 
 - The backend has evolved from an initial web migration into a production-oriented FastAPI service.
