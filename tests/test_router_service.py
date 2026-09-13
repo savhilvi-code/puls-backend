@@ -2,7 +2,7 @@ import unittest
 
 from app.schemas.router import RouterDecision
 from app.schemas.user import UserRecord
-from app.services.router_service import _stabilize_decision
+from app.services.router_service import _local_router, _stabilize_decision
 
 
 def _user_with_history() -> UserRecord:
@@ -65,6 +65,14 @@ class RouterGreetingStabilizationTests(unittest.TestCase):
         self.assertEqual(decision.message_type, "followup_deep")
         self.assertTrue(decision.ready_to_search)
         self.assertTrue(decision.deep_search)
+
+    def test_small_talk_fallback_stays_general(self):
+        for text in ("как дела", "спасибо", "понятно", "how are you"):
+            with self.subTest(text=text):
+                decision = _local_router(text, "ru")
+                self.assertEqual(decision.message_type, "general")
+                self.assertFalse(decision.ready_to_search)
+                self.assertFalse(decision.deep_search)
 
 
 if __name__ == "__main__":

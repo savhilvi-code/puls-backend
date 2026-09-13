@@ -4,7 +4,7 @@ from app.schemas.chat import ChatResponse
 from app.services.conversation_service import get_latest_conversation_context, _looks_like_service_query
 from app.services.diagnostic_context_service import build_diagnostic_context
 from app.services.diagnostic_provider import run_diagnostic_provider
-from app.services.dialog_state_service import _looks_like_diagnostic_intent, build_dialog_state
+from app.services.dialog_state_service import _looks_like_diagnostic_intent, _looks_like_greeting, build_dialog_state
 from app.services.formatter_service import format_from_kb, format_technical_answer
 from app.services.kb_service import (
     _clean_case_answer,
@@ -19,7 +19,7 @@ from app.services.openai_service import translate_segments
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
 from app.services.puls_data_service import resolve_user_vehicle
 from app.services.response_source_service import filter_response_sources
-from app.services.router_service import route_message
+from app.services.router_service import _is_social_general_text, route_message
 from app.services.subscription_service import can_run_parser, ensure_user_subscription, quota_payload
 from app.services.user_service import get_or_create_user, update_user_after_response
 
@@ -413,7 +413,7 @@ def _current_case_seed(*, latest_context: dict | None, history: str, state) -> s
         ]
         anchor_index = -1
         for index, text in enumerate(user_texts):
-            if _looks_like_source_question(text) or _looks_like_info_followup(text):
+            if _is_social_general_text(text) or _looks_like_source_question(text) or _looks_like_info_followup(text):
                 continue
             if (
                 _extract_active_car_from_text(text)
@@ -431,6 +431,7 @@ def _current_case_seed(*, latest_context: dict | None, history: str, state) -> s
                 for text in user_texts[anchor_index + 1 :]
                 if text
                 and text != anchor
+                and not _is_social_general_text(text)
                 and not _looks_like_source_question(text)
                 and not _looks_like_info_followup(text)
             ]
@@ -452,6 +453,8 @@ def _current_case_seed(*, latest_context: dict | None, history: str, state) -> s
 
 def _looks_like_current_case_continuation(*, text: str, latest_context: dict | None, state) -> bool:
     if getattr(state, "is_greeting", False) or getattr(state, "is_feedback_helped", False) or getattr(state, "is_feedback_not_helped", False):
+        return False
+    if _is_social_general_text(text):
         return False
     if _looks_like_source_question(text):
         return True
@@ -1039,6 +1042,40 @@ def _greeting_text(language: str, assistant_hint: str = "") -> str:
     return "Hi! Describe the problem with your car."
 
 
+def _general_conversation_text(language: str, assistant_hint: str = "", user_text: str = "") -> str:
+    if assistant_hint:
+        return assistant_hint
+    if language == "ru":
+        if _is_social_general_text(user_text) and "спасиб" in str(user_text or "").lower():
+            return "Пожалуйста. Я на связи."
+        if _is_social_general_text(user_text) and _looks_like_greeting(user_text):
+            return "Привет! Я на связи."
+        return "У меня всё хорошо, я на связи. Можем продолжить в любой момент."
+    if _is_social_general_text(user_text) and "thank" in str(user_text or "").lower():
+        return "You're welcome. I'm here."
+    if _is_social_general_text(user_text) and _looks_like_greeting(user_text):
+        return "Hi! I'm here."
+    return "I'm doing well, and I'm here whenever you want to continue."
+
+
+def _is_general_conversation_turn(*, text: str, decision) -> bool:
+    if decision.message_type != "general":
+        return False
+    if decision.ready_to_search or decision.deep_search or decision.user_says_helped or decision.user_says_not_helped:
+        return False
+    if _extract_active_car_from_text(text):
+        return False
+    if (
+        _looks_like_source_question(text)
+        or _looks_like_info_followup(text)
+        or _looks_like_service_advice_query(text)
+        or _looks_like_diagnostic_intent(text)
+        or _contains_case_detail(text)
+    ):
+        return False
+    return True
+
+
 def _clarification_text(language: str) -> str:
     if language == "ru":
         return (
@@ -1277,10 +1314,14 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     user = await get_or_create_user(normalized)
     latest_context = get_latest_conversation_context(user_id=user.id)
     conversation_car = str(latest_context.get("active_car") or "").strip()
-    initial_car_text = mentioned_car or conversation_car or normalized.car_info or user.car_info
-    resolved_vehicle = resolve_user_vehicle(
-        user_id=user.id,
-        car_text=initial_car_text,
+    initial_car_text = mentioned_car or normalized.car_info
+    resolved_vehicle = (
+        resolve_user_vehicle(
+            user_id=user.id,
+            car_text=initial_car_text,
+        )
+        if initial_car_text
+        else None
     )
     vehicle_id = resolved_vehicle.get("id") if resolved_vehicle else None
     resolved_car_label = _vehicle_label(resolved_vehicle)
@@ -1329,6 +1370,36 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         latest_context=latest_context,
         state=state,
     )
+
+    if _is_general_conversation_turn(text=normalized.text, decision=decision):
+        preserved_active_car = ""
+        preserved_vehicle_id = vehicle_id
+        if mentioned_car:
+            preserved_active_car = state.active_car or resolved_car_label or mentioned_car
+        elif conversation_car:
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=conversation_car)
+            preserved_vehicle_id = bound_vehicle_id
+            preserved_active_car = bound_label or conversation_car
+            if bound_label:
+                normalized = normalized.model_copy(update={"car_info": bound_label})
+        answer_text = _general_conversation_text(
+            state.language,
+            decision.response,
+            normalized.text,
+        )
+        await update_user_after_response(
+            user,
+            normalized,
+            answer_text,
+            should_decrease_limit=False,
+            active_car=preserved_active_car,
+            symptom=current_case_seed if preserved_active_car else "",
+            message_type="general",
+            vehicle_id=preserved_vehicle_id,
+            force_new_conversation=False,
+        )
+        return ChatResponse(answer=answer_text, links=[], quota=_quota_payload(user))
+
     if mentioned_car:
         state.active_car = mentioned_car
     elif service_flow_active:

@@ -34,6 +34,24 @@ _PROBLEM_HINTS = (
 _FEEDBACK_HELPED = ("helped", "fixed", "solved", "works", "помогло", "исправлено", "решено", "работает")
 _FEEDBACK_DEEP = ("не помогло", "ищи глубже", "нужно больше информации", "more details", "not helped", "still")
 _GREETINGS = ("hi", "hello", "hey", "привет", "здравствуй", "здравствуйте", "добрый день", "доброе утро", "добрый вечер")
+_SOCIAL_CUES = (
+    "how are you",
+    "how's it going",
+    "thanks",
+    "thank you",
+    "cool",
+    "okay",
+    "ok",
+    "как дела",
+    "как ты",
+    "спасибо",
+    "понятно",
+    "ясно",
+    "круто",
+    "ладно",
+    "ок",
+    "окей",
+)
 
 
 def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
@@ -133,6 +151,19 @@ def _is_greeting(text: str) -> bool:
     return False
 
 
+def _is_social_general_text(text: str) -> bool:
+    lowered = " ".join(str(text or "").strip().lower().strip(" \t\n\r,.:;!?").split())
+    if not lowered:
+        return False
+    if _is_greeting(lowered):
+        return True
+    if _has_car_hint(lowered) or _has_problem_hint(lowered) or _has_diagnostic_intent(lowered):
+        return False
+    if _has_feedback_helped(lowered) or _has_feedback_deep(lowered):
+        return False
+    return len(lowered.split()) <= 5 and any(cue in lowered for cue in _SOCIAL_CUES)
+
+
 def _local_router(text: str, language: str) -> RouterDecision:
     lowered = text.lower().strip()
     language = normalize_language_code(language)
@@ -142,6 +173,23 @@ def _local_router(text: str, language: str) -> RouterDecision:
     greetings = {"hi", "hello", "hey", "привет", "здравствуйте", "здравствуй"}
 
     if _is_greeting(lowered):
+        return RouterDecision(
+            message_type="general",
+            language=language,
+            need_car_info=False,
+            need_clarification=False,
+            ready_to_search=False,
+            deep_search=False,
+            user_says_helped=False,
+            user_says_not_helped=False,
+            question="",
+            car_info="",
+            active_car="",
+            symptom="",
+            response="",
+        )
+
+    if _is_social_general_text(lowered):
         return RouterDecision(
             message_type="general",
             language=language,
@@ -238,6 +286,7 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
     has_helped = _has_feedback_helped(lowered)
     has_deep = _has_feedback_deep(lowered)
     is_greeting = _is_greeting(lowered)
+    is_social_general = _is_social_general_text(lowered)
 
     if is_greeting:
         if has_diagnostic_intent or has_problem or has_car:
@@ -256,6 +305,20 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
                 "need_car_info": False,
                 "ready_to_search": False,
                 "deep_search": False,
+                "response": "",
+            }
+        )
+
+    if is_social_general:
+        return decision.model_copy(
+            update={
+                "message_type": "general",
+                "need_car_info": False,
+                "need_clarification": False,
+                "ready_to_search": False,
+                "deep_search": False,
+                "user_says_helped": False,
+                "user_says_not_helped": False,
                 "response": "",
             }
         )

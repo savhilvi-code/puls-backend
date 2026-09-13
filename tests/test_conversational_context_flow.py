@@ -523,5 +523,221 @@ class RealContextPrecedenceTests(unittest.TestCase):
         self.assertIn("CV joint", response.answer)
 
 
+class SocialConversationRoutingTests(unittest.TestCase):
+    def _vehicle_resolver(self, *, user_id=None, car_text=""):
+        text = str(car_text or "").lower()
+        if "toyota" in text:
+            return {"id": 10, "brand": "Toyota", "model": "Corolla", "year": 2010, "engine": "1ZZ"}
+        if "nissan" in text or "x-trail" in text or "xtrail" in text:
+            return {"id": 20, "brand": "Nissan", "model": "X-Trail", "year": 2003, "engine": "SR20VET"}
+        return None
+
+    def _run_real_state_chat(
+        self,
+        *,
+        message,
+        latest_context,
+        user=None,
+        decision=None,
+        kb_match=None,
+        parser_case=None,
+    ):
+        captured = {}
+        parser = AsyncMock(return_value=parser_case or _parser_case())
+        kb = AsyncMock(return_value=kb_match)
+        history = AsyncMock(return_value=None)
+        provider = Mock(return_value=None)
+        route = AsyncMock(return_value=decision or _decision(language="ru"))
+
+        async def fake_update(*args, **kwargs):
+            captured["update"] = kwargs
+
+        async def fake_translate(*, segments, target_language):
+            return list(segments)
+
+        with (
+            patch.object(decision_engine, "get_or_create_user", new=AsyncMock(return_value=user or _user())),
+            patch.object(decision_engine, "resolve_user_vehicle", side_effect=self._vehicle_resolver),
+            patch.object(decision_engine, "route_message", new=route),
+            patch.object(decision_engine, "get_latest_conversation_context", return_value=latest_context),
+            patch.object(decision_engine, "find_matching_case", new=kb),
+            patch.object(decision_engine, "find_matching_history_case", new=history),
+            patch.object(decision_engine, "can_run_parser", return_value=(True, {"requests_remaining": 5})),
+            patch.object(decision_engine, "parse_diagnostic", new=parser),
+            patch.object(decision_engine, "run_diagnostic_provider", new=provider),
+            patch.object(decision_engine, "translate_segments", new=fake_translate),
+            patch.object(decision_engine, "update_user_after_response", new=fake_update),
+            patch.object(decision_engine, "ensure_user_subscription"),
+        ):
+            response = asyncio.run(
+                decision_engine.process_chat_message(
+                    {"message": message, "language": (decision or _decision(language="ru")).language},
+                    source="web",
+                )
+            )
+        return response, captured, kb, history, parser, provider, route
+
+    def _general_decision(self, response=""):
+        return _decision(
+            message_type="general",
+            language="ru",
+            ready_to_search=False,
+            deep_search=False,
+            symptom="",
+            response=response,
+        )
+
+    def test_active_case_social_how_are_you_skips_diagnostic_paths_and_preserves_context(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text=f"{nissan} троит на холодную",
+            last_assistant_text="Уточните один самый важный момент.",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} троит на холодную"},
+                {"role": "assistant", "text": "Уточните один самый важный момент."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_real_state_chat(
+            message="как дела",
+            latest_context=latest,
+            decision=self._general_decision("Нормально, я на связи."),
+        )
+
+        self.assertIn("на связи", response.answer)
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertEqual(captured["update"]["active_car"], nissan)
+        self.assertEqual(captured["update"]["vehicle_id"], 20)
+        self.assertIn(f"{nissan} троит", captured["update"]["symptom"])
+        self.assertEqual(route.call_args.args[0].car_info, "")
+
+    def test_after_social_turn_short_automotive_reply_resumes_previous_nissan_case(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text="как дела",
+            last_assistant_text="Нормально, я на связи.",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} троит на холодную"},
+                {"role": "assistant", "text": "После прогрева троение полностью исчезает?"},
+                {"role": "user", "text": "как дела"},
+                {"role": "assistant", "text": "Нормально, я на связи."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_real_state_chat(
+            message="после прогрева проходит",
+            latest_context=latest,
+            decision=_decision(language="ru", symptom="после прогрева проходит", ready_to_search=True),
+        )
+
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["active_car"], nissan)
+        self.assertEqual(captured["update"]["vehicle_id"], 20)
+        self.assertEqual(captured["update"]["message_type"], "clarification")
+        self.assertIn(f"{nissan} троит", captured["update"]["symptom"])
+        self.assertNotIn("как дела", captured["update"]["symptom"])
+        self.assertIn(nissan, response.answer)
+        self.assertEqual(route.call_args.args[0].car_info, "")
+
+    def test_active_case_thanks_is_general_without_parser_or_provider(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text=f"{nissan} троит на холодную",
+            last_assistant_text="После прогрева троение полностью исчезает?",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} троит на холодную"},
+                {"role": "assistant", "text": "После прогрева троение полностью исчезает?"},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_real_state_chat(
+            message="спасибо",
+            latest_context=latest,
+            decision=self._general_decision("Пожалуйста."),
+        )
+
+        self.assertIn("Пожалуйста", response.answer)
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertEqual(captured["update"]["active_car"], nissan)
+
+    def test_no_active_case_social_message_does_not_force_vehicle_clarification(self):
+        latest = _latest_context(
+            active_car="",
+            last_user_text="",
+            last_assistant_text="",
+            recent_messages=[],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_real_state_chat(
+            message="как дела",
+            latest_context=latest,
+            user=_user(),
+            decision=self._general_decision("Нормально, я на связи."),
+        )
+
+        self.assertIn("на связи", response.answer)
+        self.assertNotIn("Укажите", response.answer)
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertEqual(captured["update"]["active_car"], "")
+        self.assertIsNone(captured["update"]["vehicle_id"])
+
+    def test_greeting_does_not_erase_toyota_and_next_short_reply_resumes_case(self):
+        toyota = "Toyota Corolla 2010 1ZZ"
+        greeting_latest = _latest_context(
+            active_car=toyota,
+            last_user_text=f"{toyota} троит",
+            last_assistant_text="Когда проявляется?",
+            recent_messages=[
+                {"role": "user", "text": f"{toyota} троит"},
+                {"role": "assistant", "text": "Когда проявляется?"},
+            ],
+        )
+        greeting = self._run_real_state_chat(
+            message="привет",
+            latest_context=greeting_latest,
+            decision=self._general_decision("Привет! Я на связи."),
+        )
+        self.assertFalse(greeting[4].called)
+        self.assertEqual(greeting[1]["update"]["active_car"], toyota)
+        self.assertEqual(greeting[1]["update"]["vehicle_id"], 10)
+
+        followup_latest = _latest_context(
+            active_car=toyota,
+            last_user_text="привет",
+            last_assistant_text="Привет! Я на связи.",
+            recent_messages=[
+                {"role": "user", "text": f"{toyota} троит"},
+                {"role": "assistant", "text": "Когда проявляется?"},
+                {"role": "user", "text": "привет"},
+                {"role": "assistant", "text": "Привет! Я на связи."},
+            ],
+        )
+        followup = self._run_real_state_chat(
+            message="на холодную",
+            latest_context=followup_latest,
+            decision=_decision(language="ru", symptom="на холодную", ready_to_search=False),
+        )
+        self.assertEqual(followup[1]["update"]["active_car"], toyota)
+        self.assertEqual(followup[1]["update"]["vehicle_id"], 10)
+        self.assertIn(f"{toyota} троит", followup[1]["update"]["symptom"])
+        self.assertNotIn("привет", followup[1]["update"]["symptom"])
+
+
 if __name__ == "__main__":
     unittest.main()
