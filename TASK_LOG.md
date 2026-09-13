@@ -44,6 +44,33 @@
 - Verified the live support submission flow after production configuration.
 - Polished the public backend repository presentation by simplifying public-facing documentation and replacing the backend README with a production-oriented overview, without changing runtime code.
 
+## 2026-09-13
+
+- Added PHASE 1 local Search Provider configuration for the backend parser flow.
+- Preserved remote parser first behavior and the legacy 1G-GZE local case while
+  making local AI search provider selection explicit through `SEARCH_PROVIDER`.
+- Set Claude as the default local search provider and kept OpenAI available only
+  when explicitly selected for future A/B testing.
+- Added focused tests for provider selection, no silent cross-vendor fallback,
+  remote parser precedence, parser contract preservation, `/chat` route
+  connectivity, deep mode, and user-language history preservation.
+- Added PHASE 2 optional Diagnostic Provider integration point after parser
+  aggregation and before localization/formatter output. The provider is disabled
+  by default with `DIAGNOSTIC_PROVIDER=none`; OpenAI synthesis is available only
+  when explicitly configured, uses no search tools, and falls back to the
+  existing formatter flow on disabled, failed, or malformed provider output.
+- Added the current clean backend architecture boundary for diagnostic context
+  aggregation. Diagnostic Provider now receives the same vendor-neutral
+  aggregated context shape from internal KB/history matches and parser/search
+  results, while `DIAGNOSTIC_PROVIDER=none` preserves deterministic formatter
+  behavior.
+- Updated confirmed-case knowledge promotion so shared `knowledge_cases` are
+  written as canonical English reusable knowledge using the existing
+  `solved_cases`, `knowledge_cases`, and `knowledge_events` flow without a
+  database schema change.
+- Added regression coverage for aggregated internal-knowledge diagnostic context
+  and canonical English knowledge promotion.
+
 ## Summary
 
 - The backend has evolved from an initial web migration into a production-oriented FastAPI service.

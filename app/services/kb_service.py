@@ -11,6 +11,7 @@ from app.database.supabase import (
     get_supabase_client,
 )
 from app.services.formatter_service import format_from_kb
+from app.services.openai_service import translate_segments
 from app.services.parser_engine import extract_json
 
 
@@ -256,6 +257,18 @@ def _extract_embedded_case(text: str) -> dict:
     if not any(parsed.get(field) for field in ("summary", "recommendation", "common_causes", "solutions", "links", "topics_found")):
         return {}
     return parsed
+
+
+async def _canonicalize_shared_knowledge_text(*, question: str, answer: str) -> tuple[str, str]:
+    try:
+        translated = await translate_segments(segments=[question, answer], target_language="en")
+    except Exception:
+        translated = [question, answer]
+    if not isinstance(translated, list) or len(translated) != 2:
+        return question, answer
+    canonical_question = str(translated[0] or question).strip()
+    canonical_answer = str(translated[1] or answer).strip()
+    return canonical_question or question, canonical_answer or answer
 
 
 def _answer_from_structured_payload(payload: dict) -> str:
@@ -613,25 +626,34 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
     answer = str(diagnostic_request.get("answer") or "").strip()
     if not question or not answer:
         return None
+    canonical_question, canonical_answer = await _canonicalize_shared_knowledge_text(
+        question=question,
+        answer=answer,
+    )
+    raw_payload = dict(diagnostic_request)
+    raw_payload["_puls_knowledge"] = {
+        "canonical_language": "en",
+        "source_language": language,
+    }
     if _is_placeholder_case(
         {
             "symptom_title": vehicle_label or question,
-            "symptom_description": question,
-            "confirmed_cause": question,
-            "recommended_action": answer,
-            "full_answer": answer,
+            "symptom_description": canonical_question,
+            "confirmed_cause": canonical_question,
+            "recommended_action": canonical_answer,
+            "full_answer": canonical_answer,
         }
     ):
         return None
     payload = {
-        "symptom_title": (vehicle_label or question)[:500],
-        "symptom_description": question,
-        "confirmed_cause": question,
-        "recommended_action": answer[:4000],
-        "full_answer": answer,
-        "raw_payload": diagnostic_request,
+        "symptom_title": (vehicle_label or canonical_question)[:500],
+        "symptom_description": canonical_question,
+        "confirmed_cause": canonical_question,
+        "recommended_action": canonical_answer[:4000],
+        "full_answer": canonical_answer,
+        "raw_payload": raw_payload,
         "forum_links": _normalize_links(diagnostic_request.get("sources") or []),
-        "country": language,
+        "country": "en",
         "source_type": "confirmed_feedback",
         "success_count": 1,
         "confidence": 0.7,
@@ -649,15 +671,15 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
                     str(row.get("full_answer") or ""),
                 ]
             )
-            if question and not _contains_any(haystack, question):
+            if canonical_question and not _contains_any(haystack, canonical_question):
                 continue
             if vehicle_label and not _vehicle_context_matches(haystack, vehicle_label):
                 continue
             updated_payload = {
-                "recommended_action": answer[:4000],
-                "full_answer": answer,
+                "recommended_action": canonical_answer[:4000],
+                "full_answer": canonical_answer,
                 "forum_links": payload["forum_links"],
-                "raw_payload": diagnostic_request,
+                "raw_payload": raw_payload,
                 "success_count": int(row.get("success_count") or 0) + 1,
                 "confidence": min(float(row.get("confidence") or 0.7) + 0.05, 1.0),
             }
@@ -673,8 +695,8 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
                 _log_confirmed_knowledge_event(
                     diagnostic_request=diagnostic_request,
                     vehicle_label=vehicle_label,
-                    answer=answer,
-                    language=language,
+                    answer=canonical_answer,
+                    language="en",
                     result="knowledge_case_updated_from_feedback",
                 )
                 return updated_rows[0]
@@ -683,8 +705,8 @@ async def save_confirmed_case_to_knowledge(*, diagnostic_request: dict | None, a
             _log_confirmed_knowledge_event(
                 diagnostic_request=diagnostic_request,
                 vehicle_label=vehicle_label,
-                answer=answer,
-                language=language,
+                answer=canonical_answer,
+                language="en",
                 result="knowledge_case_created_from_feedback",
             )
         return created

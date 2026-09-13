@@ -7,17 +7,8 @@ import re
 
 import httpx
 
-try:  # pragma: no cover - optional dependency in some local environments
-    import anthropic  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover
-    anthropic = None
-
-try:  # pragma: no cover - optional dependency in some local environments
-    from openai import OpenAI  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover
-    OpenAI = None
-
 from app.schemas.parser import DiagnosticRequest
+from app.services.search_provider import run_search_provider, unique_domains
 
 logger = logging.getLogger(__name__)
 
@@ -194,18 +185,6 @@ GE: avtoportali.ge
 }"""
 
 
-def unique_domains(domains: list[str]) -> list[str]:
-    result = []
-    seen = set()
-    for domain in domains:
-        normalized = str(domain or "").strip().lower()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        result.append(normalized)
-    return result
-
-
 def detect_forum_groups(text: str) -> list[str]:
     t = text.lower()
     groups = ["general"]
@@ -327,47 +306,6 @@ def extract_json(text: str) -> dict:
         "clarifying_question": "",
         "links": [],
     }
-
-
-def collect_response_text(response) -> str:
-    parts = []
-    for block in response.content:
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-    return "".join(parts)
-
-
-def run_claude_search(client, data: DiagnosticRequest, user_message: str, domains: list[str]):
-    return client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=5000 if data.mode.lower() == "deep" else 4000,
-        system=SYSTEM_PROMPT,
-        tools=[
-            {
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": 6 if data.mode.lower() == "deep" else 3,
-                "allowed_domains": unique_domains(domains),
-            }
-        ],
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-
-def run_openai_search(client, data: DiagnosticRequest, user_message: str, domains: list[str]):
-    return client.responses.create(
-        model="gpt-4.1-mini",
-        instructions=SYSTEM_PROMPT,
-        input=user_message,
-        max_output_tokens=5000 if data.mode.lower() == "deep" else 4000,
-        tools=[
-            {
-                "type": "web_search_preview",
-                "search_context_size": "high" if data.mode.lower() == "deep" else "medium",
-            }
-        ],
-    )
 
 
 def _combined_request_text(data: DiagnosticRequest) -> str:
@@ -654,90 +592,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
 
     context_parts = []
     if data.car_info:
-        context_parts.append(f"РњР°С€РёРЅР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ: {data.car_info}")
-    if data.conversation_history:
-        context_parts.append(f"РСЃС‚РѕСЂРёСЏ РґРёР°Р»РѕРіР°: {data.conversation_history}")
-    context = "\n".join(context_parts)
-    user_message = (
-        f"{context}\n\n"
-        f"Р—Р°РїСЂРѕСЃ: {data.query}\n"
-        f"РЇР·С‹Рє РѕС‚РІРµС‚Р°: {data.lang}\n"
-        f"Р РµР¶РёРј РїРѕРёСЃРєР°: {mode}\n\n"
-        "РЎРќРђР§РђР›Рђ РїРµСЂРµРІРµРґРё СЃРёРјРїС‚РѕРј РЅР° СЏР·С‹РєРё СЂРµР»РµРІР°РЅС‚РЅС‹С… С„РѕСЂСѓРјРѕРІ, "
-        "Р·Р°С‚РµРј РЅР°Р№РґРё СЂРµР°Р»СЊРЅС‹Рµ С‚РµРјС‹ С‡РµСЂРµР· web_search, "
-        "РїРѕСЃР»Рµ С‡РµРіРѕ РІРµСЂРЅРё РўРћР›Р¬РљРћ РІР°Р»РёРґРЅС‹Р№ JSON."
-    )
-    user_message += (
-        "\n\nРџСЂРёРѕСЂРёС‚РµС‚РЅС‹Рµ Р°РІС‚РѕРјРѕР±РёР»СЊРЅС‹Рµ РґРѕРјРµРЅС‹ РґР»СЏ РїРѕРёСЃРєР°: "
-        + ", ".join(allowed_domains)
-        + "."
-    )
-    if mode == "deep":
-        user_message += (
-            "\n\nР Р•Р–РРњ DEEP SEARCH: РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РїРѕРїСЂРѕСЃРёР» Р±РѕР»СЊС€Рµ РёРЅС„РѕСЂРјР°С†РёРё. "
-            "РС‰Рё РїРѕ СЂР°СЃС€РёСЂРµРЅРЅС‹Рј Р°РІС‚РѕРјРѕР±РёР»СЊРЅС‹Рј С„РѕСЂСѓРјР°Рј, OEM-РєР»СѓР±Р°Рј Рё С‚РµС…РЅРёС‡РµСЃРєРёРј СЃР°Р№С‚Р°Рј. "
-            "РќРµ РїРѕРІС‚РѕСЂСЏР№ СЃС‚Р°СЂС‹Р№ РѕС‚РІРµС‚. РќР°Р№РґРё РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РїСЂРёС‡РёРЅС‹, СЂРµРґРєРёРµ РІРµСЂСЃРёРё, "
-            "РїРѕРґС‚РІРµСЂР¶РґС‘РЅРЅС‹Рµ СЃР»СѓС‡Р°Рё Рё РЅРѕРІС‹Рµ СЂРµР°Р»СЊРЅС‹Рµ СЃСЃС‹Р»РєРё."
-        )
-    search_hints = _build_search_hints(data)
-    if search_hints:
-        user_message += "\n\nSearch hints:\n- " + "\n- ".join(search_hints)
-
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if mode != "deep" and openai_key and OpenAI is not None:
-        try:
-            openai_client = OpenAI(api_key=openai_key)
-            attempt_messages = [user_message]
-            if search_hints:
-                attempt_messages.append(
-                    user_message
-                    + "\n\nStrict second pass for this request:\n- "
-                    + "\n- ".join(search_hints)
-                    + "\n- Return only links and conclusions that explicitly discuss the requested part."
-                )
-
-            for attempt_index, attempt_message in enumerate(attempt_messages, start=1):
-                openai_response = run_openai_search(openai_client, data, attempt_message, allowed_domains)
-                openai_text = getattr(openai_response, "output_text", "") or ""
-                openai_result = extract_json(openai_text)
-                openai_result["_meta"] = {
-                    "engine": "OpenAI web_search",
-                    "mode": mode,
-                    "allowed_domains": allowed_domains,
-                    "fallback_used": False,
-                    "version": "7.4",
-                    "attempt": attempt_index,
-                }
-                if not openai_result.get("error") and _result_matches_request(openai_result, data):
-                    return openai_result
-        except Exception:
-            pass
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key or anthropic is None:
-        return {
-            "error": "ANTHROPIC_API_KEY not set" if not api_key else "anthropic package is not installed",
-            "summary": "Сервис поиска временно недоступен. Повторите запрос позже.",
-            "common_causes": [],
-            "solutions": [],
-            "topics_found": [],
-            "links": [],
-            "total_topics": 0,
-            "confidence": "low",
-            "recommendation": "",
-            "need_more_info": False,
-            "clarifying_question": "",
-            "_meta": {
-                "mode": mode,
-                "allowed_domains": allowed_domains,
-                "fallback_used": False,
-                "version": "7.2",
-            },
-        }
-
-    client = anthropic.Anthropic(api_key=api_key)
-    context_parts = []
-    if data.car_info:
         context_parts.append(f"Машина пользователя: {data.car_info}")
     if data.conversation_history:
         context_parts.append(f"История диалога: {data.conversation_history}")
@@ -751,6 +605,11 @@ async def diagnose(data: DiagnosticRequest) -> dict:
         "затем найди реальные темы через web_search, "
         "после чего верни ТОЛЬКО валидный JSON."
     )
+    user_message += (
+        "\n\nПриоритетные автомобильные домены для поиска: "
+        + ", ".join(allowed_domains)
+        + "."
+    )
     if mode == "deep":
         user_message += (
             "\n\nРЕЖИМ DEEP SEARCH: пользователь попросил больше информации. "
@@ -758,53 +617,17 @@ async def diagnose(data: DiagnosticRequest) -> dict:
             "Не повторяй старый ответ. Найди дополнительные причины, редкие версии, "
             "подтверждённые случаи и новые реальные ссылки."
         )
+    search_hints = _build_search_hints(data)
+    if search_hints:
+        user_message += "\n\nSearch hints:\n- " + "\n- ".join(search_hints)
 
-    allowed_domains = build_allowed_domains(data)
-    used_domains = allowed_domains
-    fallback_used = False
-    try:
-        try:
-            response = run_claude_search(client, data, user_message, allowed_domains)
-        except Exception as first_error:
-            error_text = str(first_error).lower()
-            domain_error = (
-                "domains are not accessible" in error_text
-                or "allowed_domains" in error_text
-                or "invalid_request_error" in error_text
-            )
-            if not domain_error:
-                raise
-            used_domains = unique_domains(FALLBACK_DOMAINS)
-            fallback_used = True
-            response = run_claude_search(client, data, user_message, used_domains)
-
-        raw_text = collect_response_text(response)
-        result = extract_json(raw_text)
-        result["_meta"] = {
-            "engine": "Claude Haiku 4.5 + web_search",
-            "mode": mode,
-            "allowed_domains": used_domains,
-            "fallback_used": fallback_used,
-            "version": "7.2",
-        }
-        return result
-    except Exception as error:
-        return {
-            "error": str(error),
-            "summary": "Сервис поиска временно недоступен. Повторите запрос позже.",
-            "common_causes": [],
-            "solutions": [],
-            "topics_found": [],
-            "links": [],
-            "total_topics": 0,
-            "confidence": "low",
-            "recommendation": "",
-            "need_more_info": False,
-            "clarifying_question": "",
-            "_meta": {
-                "mode": mode,
-                "allowed_domains": used_domains,
-                "fallback_used": fallback_used,
-                "version": "7.2",
-            },
-        }
+    return run_search_provider(
+        data=data,
+        user_message=user_message,
+        allowed_domains=allowed_domains,
+        fallback_domains=FALLBACK_DOMAINS,
+        system_prompt=SYSTEM_PROMPT,
+        search_hints=search_hints,
+        extract_json=extract_json,
+        result_matches_request=_result_matches_request,
+    )
