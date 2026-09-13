@@ -298,6 +298,7 @@ def _contains_case_detail(text: str) -> bool:
     detail_terms = (
         "cold",
         "hot",
+        "accelerat",
         "idle",
         "rpm",
         "speed",
@@ -323,6 +324,7 @@ def _contains_case_detail(text: str) -> bool:
         "country",
         "\u0445\u043e\u043b\u043e\u0434",
         "\u0433\u043e\u0440\u044f\u0447",
+        "\u0440\u0430\u0437\u0433\u043e\u043d",
         "\u043f\u0440\u043e\u0433\u0440\u0435\u0442",
         "\u0445\u043e\u043b\u043e\u0441\u0442",
         "\u043e\u0431\u043e\u0440\u043e\u0442",
@@ -400,6 +402,42 @@ def _clarification_depth(latest_context: dict | None) -> int:
 
 def _current_case_seed(*, latest_context: dict | None, history: str, state) -> str:
     latest_context = latest_context or {}
+    recent_messages = latest_context.get("recent_messages") or []
+    if isinstance(recent_messages, list):
+        user_texts = [
+            str(item.get("text") or "").strip()
+            for item in recent_messages
+            if isinstance(item, dict)
+            and str(item.get("role") or "").strip().lower() == "user"
+            and str(item.get("text") or "").strip()
+        ]
+        anchor_index = -1
+        for index, text in enumerate(user_texts):
+            if _looks_like_source_question(text) or _looks_like_info_followup(text):
+                continue
+            if (
+                _extract_active_car_from_text(text)
+                or _looks_like_service_advice_query(text)
+                or _looks_like_diagnostic_intent(text)
+                or _contains_case_detail(text)
+                or _word_count(text) >= 3
+            ):
+                anchor_index = index
+                break
+        if anchor_index >= 0:
+            anchor = user_texts[anchor_index]
+            facts = [
+                text
+                for text in user_texts[anchor_index + 1 :]
+                if text
+                and text != anchor
+                and not _looks_like_source_question(text)
+                and not _looks_like_info_followup(text)
+            ]
+            if facts:
+                return f"{anchor}. Known additional facts: " + "; ".join(facts[-4:])
+            return anchor
+
     for value in (
         latest_context.get("latest_service_query"),
         latest_context.get("last_user_text"),
@@ -461,7 +499,7 @@ def _should_ask_contextual_clarification(*, state, normalized, latest_context: d
     if detailed:
         return False
     if _looks_like_current_case_continuation(text=text, latest_context=latest_context, state=state):
-        return depth < 1 and not _contains_case_detail(combined)
+        return depth < 2 and not detailed
     return _word_count(text) < 10 or not _contains_case_detail(text)
 
 
@@ -553,6 +591,27 @@ def _stored_evidence_answer(*, language: str, history: str, question: str) -> tu
     if links:
         parts.append("Sources from the previous search: " + ", ".join((item.get("title") or item.get("url") or "").strip() for item in links[:4] if item.get("url")))
     return "\n\n".join(part for part in parts if part).strip(), links
+
+
+def _answer_repeats_latest_assistant(answer: str, latest_context: dict | None) -> bool:
+    latest = _normalize_phrase((latest_context or {}).get("last_assistant_text") or "")
+    current = _normalize_phrase(answer)
+    if not latest or not current:
+        return False
+    if current in latest or latest in current:
+        return True
+    shared = set(_word for _word in current.split() if len(_word) > 4).intersection(
+        _word for _word in latest.split() if len(_word) > 4
+    )
+    return len(shared) >= 18
+
+
+def _bind_conversation_vehicle(*, user_id: int | None, car_text: str) -> tuple[int | None, str]:
+    if not str(car_text or "").strip():
+        return None, ""
+    vehicle = resolve_user_vehicle(user_id=user_id, car_text=car_text)
+    label = _vehicle_label(vehicle)
+    return (vehicle.get("id") if vehicle else None), (label or str(car_text or "").strip())
 
 
 def _looks_like_service_advice_query(text: str) -> bool:
@@ -1216,18 +1275,22 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         normalized = normalized.model_copy(update={"car_info": mentioned_car})
 
     user = await get_or_create_user(normalized)
+    latest_context = get_latest_conversation_context(user_id=user.id)
+    conversation_car = str(latest_context.get("active_car") or "").strip()
+    initial_car_text = mentioned_car or conversation_car or normalized.car_info or user.car_info
     resolved_vehicle = resolve_user_vehicle(
         user_id=user.id,
-        car_text=mentioned_car or normalized.car_info or user.car_info,
+        car_text=initial_car_text,
     )
     vehicle_id = resolved_vehicle.get("id") if resolved_vehicle else None
     resolved_car_label = _vehicle_label(resolved_vehicle)
     if resolved_car_label:
         normalized = normalized.model_copy(update={"car_info": resolved_car_label})
+    elif initial_car_text:
+        normalized = normalized.model_copy(update={"car_info": initial_car_text})
 
     decision = await route_message(normalized, user)
     state = build_dialog_state(normalized, user, decision)
-    latest_context = get_latest_conversation_context(user_id=user.id)
     service_seed_query = str(latest_context.get("latest_service_query") or "").strip()
     service_seed_car = _extract_active_car_from_text(service_seed_query)
     latest_assistant_text = str(latest_context.get("last_assistant_text") or "")
@@ -1268,30 +1331,26 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     )
     if mentioned_car:
         state.active_car = mentioned_car
-    elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
-        state.active_car = resolved_car_label
     elif service_flow_active:
         remembered_car = (
             service_seed_car
-            or str(latest_context.get("active_car") or "").strip()
+            or conversation_car
             or state.active_car
         )
         if remembered_car:
             state.active_car = remembered_car
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=remembered_car)
+            vehicle_id = bound_vehicle_id
+            normalized = normalized.model_copy(update={"car_info": bound_label})
+            state.active_car = bound_label
     elif contextual_continuation:
-        remembered_car = str(latest_context.get("active_car") or "").strip()
+        remembered_car = conversation_car
         if remembered_car:
             state.active_car = remembered_car
-            dialog_vehicle_id, dialog_vehicle_label = _resolve_dialog_vehicle_binding(
-                user_id=user.id,
-                car_text=remembered_car,
-            )
-            if dialog_vehicle_label:
-                vehicle_id = dialog_vehicle_id
-                normalized = normalized.model_copy(update={"car_info": dialog_vehicle_label})
-                state.active_car = dialog_vehicle_label
-            else:
-                vehicle_id = None
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=remembered_car)
+            vehicle_id = bound_vehicle_id
+            normalized = normalized.model_copy(update={"car_info": bound_label})
+            state.active_car = bound_label
         if current_case_seed and not _looks_like_source_question(normalized.text):
             state.previous_symptom = current_case_seed
             state.current_symptom = (
@@ -1302,6 +1361,13 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             state.needs_car_clarification = False
             state.needs_problem_clarification = False
             state.should_search = True
+    elif conversation_car:
+        bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=conversation_car)
+        vehicle_id = bound_vehicle_id
+        normalized = normalized.model_copy(update={"car_info": bound_label})
+        state.active_car = bound_label
+    elif resolved_car_label and (not state.active_car or _vehicle_context_matches(state.active_car, resolved_car_label)):
+        state.active_car = resolved_car_label
 
     if state.active_car and _should_clear_vehicle_binding(
         active_car=state.active_car,
@@ -1625,8 +1691,13 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             state.current_symptom = previous_search_symptom
         elif not state.current_symptom and state.previous_symptom:
             state.current_symptom = state.previous_symptom
-        if not state.active_car:
-            state.active_car = str(latest_context.get("active_car") or "").strip() or user.car_info
+        if conversation_car and not mentioned_car:
+            bound_vehicle_id, bound_label = _bind_conversation_vehicle(user_id=user.id, car_text=conversation_car)
+            vehicle_id = bound_vehicle_id
+            normalized = normalized.model_copy(update={"car_info": bound_label})
+            state.active_car = bound_label
+        elif not state.active_car:
+            state.active_car = user.car_info
 
     matched_case = None
     matched_case_answer = ""
@@ -1634,9 +1705,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
     matched_case_is_placeholder = False
     if (
         state.should_search
-        and not state.should_deep_search
         and not _looks_like_info_followup(normalized.text)
-        and not service_detail_context
     ):
         matched_case = await find_matching_case(state, decision)
         matched_case_answer = str((matched_case or {}).get("answer", "")).strip()
@@ -1650,8 +1719,14 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 "need more information",
             },
         )
+        if state.is_feedback_not_helped and _answer_repeats_latest_assistant(matched_case_answer, latest_context):
+            matched_case_is_placeholder = True
 
-        if (matched_case is None or not (matched_case_answer or matched_case_links) or matched_case_is_placeholder) and user.conversation_history:
+        if (
+            (matched_case is None or not (matched_case_answer or matched_case_links) or matched_case_is_placeholder)
+            and user.conversation_history
+            and not state.is_feedback_not_helped
+        ):
             matched_case = await find_matching_history_case(
                 history=user.conversation_history,
                 active_car=state.active_car or normalized.car_info or user.car_info,
@@ -1669,6 +1744,8 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                     "need more information",
                 },
             )
+            if state.is_feedback_not_helped and _answer_repeats_latest_assistant(matched_case_answer, latest_context):
+                matched_case_is_placeholder = True
 
         if matched_case is not None and (matched_case_answer or matched_case_links) and not matched_case_is_placeholder:
             matched_case_answer, embedded_links = _clean_case_answer(matched_case_answer)

@@ -151,13 +151,12 @@ class ConversationalContextFlowTests(unittest.TestCase):
             latest_context=latest,
         )
 
-        self.assertTrue(parser.called)
-        parser_payload = parser.call_args.args[0]
-        self.assertEqual(parser_payload["active_car"], "Context Car 2.0")
-        self.assertIn("Context Car 2.0 engine stalls", parser_payload["symptom"])
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["update"]["active_car"], "Context Car 2.0")
+        self.assertIn("Context Car 2.0 engine stalls", captured["update"]["symptom"])
         self.assertEqual(captured["update"]["vehicle_id"], None)
-        self.assertEqual(captured["update"]["message_type"], "parser")
-        self.assertIn("Stored diagnostic answer", response.answer)
+        self.assertEqual(captured["update"]["message_type"], "clarification")
+        self.assertIn("Context Car 2.0", response.answer)
 
     def test_detailed_first_message_skips_unnecessary_clarification(self):
         response, captured, kb, parser = self._run_chat(
@@ -298,6 +297,230 @@ class ConversationalContextFlowTests(unittest.TestCase):
         self.assertEqual(parser.call_args.args[0]["active_car"], "Switch Car 2020 2.0")
         self.assertEqual(captured["update"]["vehicle_id"], 22)
         self.assertIn("Stored diagnostic answer", response.answer)
+
+
+class RealContextPrecedenceTests(unittest.TestCase):
+    def _vehicle_resolver(self, *, user_id=None, car_text=""):
+        text = str(car_text or "").lower()
+        if "toyota" in text:
+            return {"id": 10, "brand": "Toyota", "model": "Corolla", "year": 2010, "engine": "1ZZ"}
+        if "nissan" in text or "x-trail" in text or "xtrail" in text:
+            return {"id": 20, "brand": "Nissan", "model": "X-Trail", "year": 2003, "engine": "SR20VET"}
+        return None
+
+    def _run_real_state_chat(
+        self,
+        *,
+        message,
+        latest_context,
+        user=None,
+        decision=None,
+        kb_match=None,
+        history_match=None,
+        parser_case=None,
+    ):
+        captured = {}
+        parser = AsyncMock(return_value=parser_case or _parser_case())
+        kb = AsyncMock(return_value=kb_match)
+        history = AsyncMock(return_value=history_match)
+
+        async def fake_update(*args, **kwargs):
+            captured["update"] = kwargs
+
+        async def fake_translate(*, segments, target_language):
+            return list(segments)
+
+        with (
+            patch.object(decision_engine, "get_or_create_user", new=AsyncMock(return_value=user or _user())),
+            patch.object(decision_engine, "resolve_user_vehicle", side_effect=self._vehicle_resolver),
+            patch.object(decision_engine, "route_message", new=AsyncMock(return_value=decision or _decision(language="ru"))),
+            patch.object(decision_engine, "get_latest_conversation_context", return_value=latest_context),
+            patch.object(decision_engine, "find_matching_case", new=kb),
+            patch.object(decision_engine, "find_matching_history_case", new=history),
+            patch.object(decision_engine, "can_run_parser", return_value=(True, {"requests_remaining": 5})),
+            patch.object(decision_engine, "parse_diagnostic", new=parser),
+            patch.object(decision_engine, "run_diagnostic_provider", return_value=None),
+            patch.object(decision_engine, "translate_segments", new=fake_translate),
+            patch.object(decision_engine, "update_user_after_response", new=fake_update),
+            patch.object(decision_engine, "ensure_user_subscription"),
+        ):
+            response = asyncio.run(
+                decision_engine.process_chat_message(
+                    {"message": message, "language": (decision or _decision(language="ru")).language},
+                    source="web",
+                )
+            )
+        return response, captured, kb, history, parser
+
+    def test_recent_conversation_vehicle_beats_old_history_for_short_reply(self):
+        old_history = (
+            "source: web\n"
+            "message_type: parser\n"
+            "active_car: Nissan X-Trail 2003 SR20VET\n"
+            "symptom: Nissan old problem\n"
+            "user: Nissan old problem\n"
+            "assistant: old answer"
+        )
+        latest = _latest_context(
+            active_car="Toyota Corolla 2010 1ZZ",
+            last_user_text="Toyota Corolla 2010 1ZZ vibrates",
+            last_assistant_text="What is the single most useful condition?",
+            recent_messages=[
+                {"role": "user", "text": "Toyota Corolla 2010 1ZZ vibrates"},
+                {"role": "assistant", "text": "What is the single most useful condition?"},
+            ],
+        )
+
+        response, captured, kb, history, parser = self._run_real_state_chat(
+            message="на холодную",
+            user=_user(history=old_history, car_info="Nissan X-Trail 2003 SR20VET"),
+            latest_context=latest,
+            decision=_decision(language="ru", ready_to_search=False, symptom="на холодную"),
+        )
+
+        self.assertEqual(captured["update"]["active_car"], "Toyota Corolla 2010 1ZZ")
+        self.assertEqual(captured["update"]["vehicle_id"], 10)
+        self.assertFalse(parser.called)
+        self.assertIn("Toyota Corolla 2010 1ZZ", response.answer)
+
+    def test_explicit_current_vehicle_switch_beats_recent_conversation(self):
+        latest = _latest_context(
+            active_car="Toyota Corolla 2010 1ZZ",
+            last_user_text="Toyota Corolla 2010 1ZZ vibrates",
+            last_assistant_text="What is the single most useful condition?",
+            recent_messages=[
+                {"role": "user", "text": "Toyota Corolla 2010 1ZZ vibrates"},
+                {"role": "assistant", "text": "What is the single most useful condition?"},
+            ],
+        )
+
+        response, captured, kb, history, parser = self._run_real_state_chat(
+            message="теперь Nissan X-Trail 2003 SR20VET на холодную",
+            user=_user(car_info="Toyota Corolla 2010 1ZZ"),
+            latest_context=latest,
+            decision=_decision(language="ru", ready_to_search=False, symptom="на холодную"),
+        )
+
+        self.assertEqual(captured["update"]["active_car"], "Nissan X-Trail 2003 SR20VET")
+        self.assertEqual(captured["update"]["vehicle_id"], 20)
+        self.assertTrue(parser.called)
+        self.assertEqual(parser.call_args.args[0]["active_car"], "Nissan X-Trail 2003 SR20VET")
+
+    def test_clarification_turns_suppress_parser_until_context_is_sufficient_then_check_kb(self):
+        toyota = "Toyota Corolla 2010 1ZZ"
+        decision = _decision(language="en", ready_to_search=True, symptom="vibration")
+
+        first = self._run_real_state_chat(
+            message=f"{toyota} vibrates",
+            latest_context=_latest_context(active_car="", last_user_text="", last_assistant_text="", recent_messages=[]),
+            decision=decision,
+        )
+        self.assertFalse(first[4].called)
+        self.assertFalse(first[2].called)
+        self.assertEqual(first[1]["update"]["message_type"], "clarification")
+
+        second_latest = _latest_context(
+            active_car=toyota,
+            last_user_text=f"{toyota} vibrates",
+            last_assistant_text="What is the single most useful condition?",
+            recent_messages=[
+                {"role": "user", "text": f"{toyota} vibrates"},
+                {"role": "assistant", "text": "What is the single most useful condition?"},
+            ],
+        )
+        second = self._run_real_state_chat(
+            message="only under acceleration",
+            latest_context=second_latest,
+            decision=decision,
+        )
+        self.assertFalse(second[4].called)
+        self.assertFalse(second[2].called)
+        self.assertEqual(second[1]["update"]["active_car"], toyota)
+
+        kb_match = {
+            "id": 33,
+            "answer": "Internal vibration case",
+            "links": [],
+            "row": {"source_table": "knowledge_cases"},
+        }
+        third_latest = _latest_context(
+            active_car=toyota,
+            last_user_text="only under acceleration",
+            last_assistant_text="Are there any DTC/warning lights, or did anything get repaired or replaced before it started?",
+            recent_messages=[
+                {"role": "user", "text": f"{toyota} vibrates"},
+                {"role": "assistant", "text": "What is the single most useful condition?"},
+                {"role": "user", "text": "only under acceleration"},
+                {"role": "assistant", "text": "Are there any DTC/warning lights, or did anything get repaired or replaced before it started?"},
+            ],
+        )
+        third = self._run_real_state_chat(
+            message="after right axle replacement",
+            latest_context=third_latest,
+            decision=decision,
+            kb_match=kb_match,
+        )
+        self.assertTrue(third[2].called)
+        self.assertFalse(third[4].called)
+        self.assertEqual(third[1]["update"]["message_type"], "kb_match")
+
+        fourth = self._run_real_state_chat(
+            message="after right axle replacement",
+            latest_context=third_latest,
+            decision=decision,
+            kb_match=None,
+        )
+        self.assertTrue(fourth[2].called)
+        self.assertTrue(fourth[4].called)
+        self.assertEqual(fourth[1]["update"]["message_type"], "parser")
+
+    def test_ordinary_followup_can_reuse_history_evidence_without_parser(self):
+        toyota = "Toyota Corolla 2010 1ZZ"
+        history_text = (
+            "source: web\n"
+            "message_type: parser\n"
+            f"active_car: {toyota}\n"
+            "symptom: vibration under acceleration after axle replacement\n"
+            "user: vibration under acceleration after axle replacement\n"
+            "assistant: Check inner CV joint, axle seating, engine mounts.\n"
+            "links:\n"
+            "- Stored forum: https://example.com/stored"
+        )
+        latest = _latest_context(
+            active_car=toyota,
+            last_user_text="after right axle replacement",
+            last_assistant_text="Check inner CV joint, axle seating, engine mounts.",
+            recent_messages=[
+                {"role": "user", "text": f"{toyota} vibrates"},
+                {"role": "assistant", "text": "What is the single most useful condition?"},
+                {"role": "user", "text": "only under acceleration"},
+                {"role": "assistant", "text": "Are there any DTC/warning lights?"},
+                {"role": "user", "text": "after right axle replacement"},
+                {"role": "assistant", "text": "Check inner CV joint, axle seating, engine mounts."},
+            ],
+        )
+        history_match = {
+            "id": "history",
+            "answer": "Check inner CV joint, axle seating, engine mounts.",
+            "links": [{"title": "Stored forum", "url": "https://example.com/stored", "description": "", "type": "link"}],
+            "row": {"message_type": "parser"},
+            "source_type": "history",
+        }
+
+        response, captured, kb, history, parser = self._run_real_state_chat(
+            message="what should I check first?",
+            user=_user(history=history_text),
+            latest_context=latest,
+            decision=_decision(language="en", ready_to_search=True, symptom="what should I check first?"),
+            kb_match=None,
+            history_match=history_match,
+        )
+
+        self.assertTrue(kb.called)
+        self.assertTrue(history.called)
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["update"]["message_type"], "kb_match")
+        self.assertIn("CV joint", response.answer)
 
 
 if __name__ == "__main__":

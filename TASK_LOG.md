@@ -94,6 +94,14 @@
   app\services\conversation_service.py tests\test_conversational_context_flow.py`
   and `python -m unittest discover -s tests` after `pytest` was unavailable in
   the local Python environment.
+- Follow-up fix on `conversational-context-flow`: moved recent conversation
+  context ahead of vehicle resolution so current-case vehicles beat older
+  `user.car_info`, strengthened current-topic reconstruction from recent
+  `messages`, allowed internal PULS knowledge/history checks before service
+  detail and negative-feedback parser paths, and added less-mocked regression
+  coverage for stale vehicle precedence, explicit vehicle switch, multi-turn
+  clarification suppression, KB-before-parser behavior, and evidence reuse.
+  Verified with direct conversational tests and the full unittest suite.
 
 ## Summary
 
