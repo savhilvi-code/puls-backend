@@ -220,6 +220,14 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
     last_assistant_text = ""
     last_user_text = ""
     latest_service_query = ""
+    recent_messages = [
+        {
+            "role": str(row.get("role") or "").strip().lower(),
+            "text": str(row.get("message_text") or "").strip(),
+            "created_at": row.get("created_at"),
+        }
+        for row in message_rows
+    ]
     for index in range(len(message_rows) - 1, -1, -1):
         row = message_rows[index]
         role = str(row.get("role") or "").strip().lower()
@@ -245,6 +253,11 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
     vehicle_id = conversation.get("vehicle_id")
     if vehicle_id:
         vehicle_label = _load_vehicle_labels([int(vehicle_id)]).get(int(vehicle_id), "")
+    if not vehicle_label:
+        for row in reversed(message_rows):
+            vehicle_label = _extract_vehicle_label(str(row.get("message_text") or ""))
+            if vehicle_label:
+                break
 
     return {
         "conversation_id": str(conversation_id),
@@ -252,6 +265,7 @@ def get_latest_conversation_context(*, user_id: int | None) -> dict[str, str]:
         "last_user_text": last_user_text,
         "last_assistant_text": last_assistant_text,
         "latest_service_query": latest_service_query,
+        "recent_messages": recent_messages,
     }
 
 
