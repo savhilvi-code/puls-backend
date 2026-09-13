@@ -18,6 +18,7 @@ from app.services.normalize_service import normalize_chat_input
 from app.services.openai_service import translate_segments
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
 from app.services.puls_data_service import resolve_user_vehicle
+from app.services.response_source_service import filter_response_sources
 from app.services.router_service import route_message
 from app.services.subscription_service import can_run_parser, ensure_user_subscription, quota_payload
 from app.services.user_service import get_or_create_user, update_user_after_response
@@ -1430,7 +1431,19 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         if len(probable_causes) > 2:
             less_likely = probable_causes[2:]
             probable_causes = probable_causes[:2]
-        response_links = parsed_case.get("links") or []
+        discovered_links = parsed_case.get("links") or []
+        answer_context = "\n".join(
+            str(item or "")
+            for item in [diagnosis_text, *probable_causes, *first_checks, *less_likely]
+            if str(item or "").strip()
+        )
+        response_links = filter_response_sources(
+            current_query=parser_query,
+            effective_symptom=effective_symptom,
+            answer_context=answer_context,
+            links=discovered_links,
+            extracted_cases=extracted_cases,
+        )
         parser_placeholder = _contains_any_phrase(
             diagnosis_text,
             {

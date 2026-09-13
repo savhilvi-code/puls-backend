@@ -70,6 +70,13 @@
   database schema change.
 - Added regression coverage for aggregated internal-knowledge diagnostic context
   and canonical English knowledge promotion.
+- Added a focused Response Source filtering layer after parser normalization and
+  before user-facing formatter/persistence output. Parser discovery remains
+  broad and raw parser evidence is preserved, while `/chat` response links can
+  be conservatively narrowed to the current question topic. Added tests for the
+  Toyota Crown 1G-GZE engine-oil source case, unknown-topic fallback, parser raw
+  evidence preservation, filtered `ChatResponse.links`, and the unchanged
+  `/chat` response contract.
 
 ## Summary
 
