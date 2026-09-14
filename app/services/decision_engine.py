@@ -17,7 +17,7 @@ from app.services.kb_service import (
     increment_case_success,
 )
 from app.services.normalize_service import normalize_chat_input
-from app.services.openai_service import translate_segments
+from app.services.openai_service import OpenAIRouterUnavailableError, generate_natural_chat_reply, translate_segments
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
 from app.services.puls_data_service import resolve_user_vehicle
 from app.services.response_source_service import filter_response_sources
@@ -80,6 +80,15 @@ def _word_count(text: str) -> int:
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     lowered = _normalize_phrase(text)
     return any(term in lowered for term in terms)
+
+
+def _plain_text_response(text: str) -> str:
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+    cleaned = cleaned.replace("**", "").replace("__", "")
+    cleaned = re.sub(r"(?m)^\s*[-*]\s+", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def _extract_active_car_from_text(text: str) -> str:
@@ -462,7 +471,6 @@ def _general_conversation_text(language: str, assistant_hint: str = "", user_tex
 
 
 def _meta_conversation_text(*, language: str, user_text: str, previous_assistant: str, active_car: str) -> str:
-    previous = str(previous_assistant or "").strip()
     if language == "ru":
         if active_car:
             return (
@@ -473,6 +481,48 @@ def _meta_conversation_text(*, language: str, user_text: str, previous_assistant
     if active_car:
         return f"I meant the car context we had been discussing: {active_car}. I was saying I still have that conversation context in the background."
     return "I meant my previous reply and the thread of the conversation. I am not starting diagnostics from that question."
+
+
+def _recent_messages(latest_context: dict | None) -> list[dict]:
+    messages = (latest_context or {}).get("recent_messages") or []
+    if not isinstance(messages, list):
+        return []
+    result = []
+    for item in messages[-8:]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "role": str(item.get("role") or "").strip(),
+                "text": str(item.get("text") or "").strip(),
+            }
+        )
+    return result
+
+
+async def _natural_chat_text(
+    *,
+    mode: str,
+    context: FastChatContext,
+    normalized,
+    latest_context: dict | None,
+    assistant_hint: str = "",
+    fallback: str = "",
+) -> str:
+    try:
+        reply = await generate_natural_chat_reply(
+            mode=mode,
+            user_text=str(normalized.text or ""),
+            language=context.language,
+            recent_conversation=_recent_messages(latest_context),
+            active_vehicle=context.active_car,
+            automotive_context=context.case_seed,
+            pending_clarification=fallback if mode == "CLARIFICATION" else "",
+            stored_facts=context.user_facts,
+        )
+    except (OpenAIRouterUnavailableError, Exception):
+        reply = assistant_hint or fallback
+    return _plain_text_response(reply or fallback)
 
 
 def _clarification_text(*, language: str, active_car: str, symptom: str, stage: int = 1) -> str:
@@ -632,7 +682,7 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         mode = "AUTOMOTIVE_CONTINUATION"
     elif _has_automotive_content(text):
         mode = "AUTOMOTIVE_NEW_CASE"
-    elif decision.ready_to_search:
+    elif decision.message_type in {"new_diagnostic", "clarification"} and (decision.active_car or decision.car_info or _has_automotive_content(decision.symptom)):
         mode = "AUTOMOTIVE_NEW_CASE"
 
     active_car = mentioned_car or conversation_car or payload_car or (fallback_car if mode not in {"GENERAL_CHAT", "META_CHAT"} else "")
@@ -692,6 +742,7 @@ async def _persist_and_return(
     parsed_case: dict | None = None,
     should_decrease_limit: bool = False,
 ) -> ChatResponse:
+    answer_text = _plain_text_response(answer_text)
     await update_user_after_response(
         user,
         normalized,
@@ -730,14 +781,29 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             context.vehicle_id = vehicle_id
             context.current_symptom = _latest_non_social_user_text(latest_context, getattr(user, "conversation_history", "") or "")
         if context.mode == "META_CHAT":
-            answer_text = _meta_conversation_text(
+            fallback = _meta_conversation_text(
                 language=context.language,
                 user_text=normalized.text,
                 previous_assistant=str((latest_context or {}).get("last_assistant_text") or ""),
                 active_car=context.active_car,
             )
+            answer_text = await _natural_chat_text(
+                mode="META_CHAT",
+                context=context,
+                normalized=normalized,
+                latest_context=latest_context,
+                fallback=fallback,
+            )
         else:
-            answer_text = _general_conversation_text(context.language, decision.response, normalized.text)
+            fallback = _general_conversation_text(context.language, decision.response, normalized.text)
+            answer_text = await _natural_chat_text(
+                mode="GENERAL_CHAT",
+                context=context,
+                normalized=normalized,
+                latest_context=latest_context,
+                assistant_hint=decision.response,
+                fallback=fallback,
+            )
         return await _persist_and_return(
             user=user,
             normalized=normalized,
@@ -783,11 +849,18 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
 
     if context.needs_clarification:
         stage = 2 if _contains_case_detail(context.current_symptom) else 1
-        answer_text = _clarification_text(
+        fallback = _clarification_text(
             language=context.language,
             active_car=context.active_car,
             symptom=context.current_symptom,
             stage=stage,
+        )
+        answer_text = await _natural_chat_text(
+            mode="CLARIFICATION",
+            context=context,
+            normalized=normalized,
+            latest_context=latest_context,
+            fallback=fallback,
         )
         return await _persist_and_return(
             user=user,
@@ -976,10 +1049,17 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             should_decrease_limit=True,
         )
 
-    answer_text = _clarification_text(
+    fallback = _clarification_text(
         language=context.language,
         active_car=context.active_car,
         symptom=context.current_symptom,
+    )
+    answer_text = await _natural_chat_text(
+        mode="CLARIFICATION",
+        context=context,
+        normalized=normalized,
+        latest_context=latest_context,
+        fallback=fallback,
     )
     return await _persist_and_return(
         user=user,

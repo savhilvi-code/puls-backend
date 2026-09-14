@@ -88,6 +88,16 @@ TRANSLATION_JSON_SCHEMA = {
 }
 
 
+CHAT_REPLY_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string"},
+    },
+    "required": ["reply"],
+    "additionalProperties": False,
+}
+
+
 async def generate_router_decision(
     *, prompt: str, text: str, language: str, car_info: str, conversation_history: str
 ) -> RouterDecision:
@@ -194,6 +204,57 @@ async def translate_segments(*, segments: list[str], target_language: str) -> li
         return localized
     except Exception:
         return prepared
+
+
+async def generate_natural_chat_reply(
+    *,
+    mode: str,
+    user_text: str,
+    language: str,
+    recent_conversation: list[dict] | None = None,
+    active_vehicle: str = "",
+    automotive_context: str = "",
+    pending_clarification: str = "",
+    stored_facts: list[str] | None = None,
+) -> str:
+    if not is_configured():
+        raise OpenAIRouterUnavailableError("OpenAI is not configured. Set OPENAI_API_KEY.")
+
+    payload = {
+        "mode": mode,
+        "language": normalize_language_code(language),
+        "user_text": user_text,
+        "recent_conversation": recent_conversation or [],
+        "active_vehicle": active_vehicle,
+        "automotive_context": automotive_context,
+        "pending_clarification": pending_clarification,
+        "stored_facts": stored_facts or [],
+    }
+    client = get_openai_client()
+    response = client.responses.create(
+        model="gpt-4o-mini",
+        instructions=(
+            "You are PULS, a natural conversational assistant specialized around cars. "
+            "Answer the current user turn directly in the user's language. "
+            "Use recent conversation and active vehicle only as background context. "
+            "For general or meta conversation, do not diagnose, do not ask automotive intake questions, "
+            "and do not mention parser, search, quota, sources, or deep search. "
+            "For clarification, ask one useful conversational question only. "
+            "Return clean plain text only: no Markdown, no headings, no tables, no bullets unless the user explicitly asks."
+        ),
+        input=json.dumps(payload, ensure_ascii=False),
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "natural_chat_reply",
+                "description": "Plain-text natural PULS chat reply.",
+                "schema": CHAT_REPLY_JSON_SCHEMA,
+                "strict": True,
+            }
+        },
+    )
+    data = _extract_json(getattr(response, "output_text", "") or "")
+    return str(data.get("reply") or "").strip()
 
 
 async def generate_diagnostic_answer(*, text: str, car_info: str, language: str):
