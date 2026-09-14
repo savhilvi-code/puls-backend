@@ -31,5 +31,5 @@ For new_diagnostic and followup_deep, response can be empty.
 Examples:
 - "Привет" -> general with a short greeting response.
 - "Привет, как заменить прикуриватель на машине" -> new_diagnostic.
-- "Nissan Xtrail 2003 плохо заводится на холодную" -> new_diagnostic.
+- "BrandA ModelB 2012 плохо заводится на холодную" -> new_diagnostic.
 - "не помогло, ищи глубже" -> followup_deep.

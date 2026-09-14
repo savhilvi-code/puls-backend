@@ -19,7 +19,8 @@ from app.services.kb_service import (
 from app.services.normalize_service import normalize_chat_input
 from app.services.openai_service import OpenAIRouterUnavailableError, generate_natural_chat_reply, translate_segments
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
-from app.services.puls_data_service import resolve_user_vehicle
+from app.services.puls_data_service import find_reusable_media, resolve_user_vehicle, upsert_reference_media
+from app.services.reference_search_service import ReferenceSearchUnavailableError, search_reference
 from app.services.response_source_service import filter_response_sources
 from app.services.router_service import route_message
 from app.services.subscription_service import can_run_parser, ensure_user_subscription, quota_payload
@@ -33,6 +34,11 @@ class FastChatContext:
     active_car: str = ""
     vehicle_id: int | None = None
     current_symptom: str = ""
+    previous_symptom: str = ""
+    problem_class: str = "OTHER"
+    search_intent: str = ""
+    current_subject: str = ""
+    reference_target: str = ""
     case_seed: str = ""
     user_facts: list[str] = field(default_factory=list)
     evidence_links: list[dict] = field(default_factory=list)
@@ -232,10 +238,140 @@ def _looks_like_detail_request(text: str) -> bool:
     )
 
 
+def _looks_like_visual_request(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "what does it look like",
+            "show me",
+            "photo",
+            "picture",
+            "image",
+            "where exactly",
+            "how it looks",
+            "\u043a\u0430\u043a \u0432\u044b\u0433\u043b\u044f\u0434",
+            "\u043f\u043e\u043a\u0430\u0436",
+            "\u0444\u043e\u0442\u043e",
+            "\u043a\u0430\u0440\u0442\u0438\u043d",
+            "\u0433\u0434\u0435 \u0438\u043c\u0435\u043d\u043d\u043e",
+        ),
+    )
+
+
+def _looks_like_video_request(text: str) -> bool:
+    return _contains_any(text, ("video", "youtube", "clip", "\u0432\u0438\u0434\u0435\u043e", "\u044e\u0442\u0443\u0431"))
+
+
+def _looks_like_link_request(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "link",
+            "url",
+            "source",
+            "manual",
+            "reference",
+            "\u0441\u0441\u044b\u043b",
+            "\u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a",
+            "\u043c\u0430\u043d\u0443\u0430\u043b",
+        ),
+    )
+
+
+def _looks_like_reference_request(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "where is",
+            "where located",
+            "where can i find",
+            "identification number",
+            "engine number",
+            "part number",
+            "how to find",
+            "\u0433\u0434\u0435 \u043d\u0430\u0445\u043e\u0434",
+            "\u0433\u0434\u0435 \u0441\u0442\u043e\u0438\u0442",
+            "\u043d\u043e\u043c\u0435\u0440 \u0434\u0432\u0438\u0433",
+            "\u043d\u043e\u043c\u0435\u0440 \u043c\u043e\u0442\u043e\u0440",
+            "\u043a\u0430\u043a \u043d\u0430\u0439\u0442\u0438",
+            "\u043a\u0430\u0442\u0430\u043b\u043e\u0436\u043d",
+        ),
+    ) or _looks_like_visual_request(text) or _looks_like_video_request(text) or _looks_like_link_request(text)
+
+
+def _classify_problem(text: str) -> str:
+    lowered = _normalize_phrase(text)
+    classes = (
+        ("NO_START", ("no start", "won't start", "does not start", "cranks", "no crank", "\u043d\u0435 \u0437\u0430\u0432\u043e\u0434", "\u043a\u0440\u0443\u0442\u0438\u0442", "\u0441\u0442\u0430\u0440\u0442\u0435\u0440")),
+        ("HARD_START", ("hard start", "starts badly", "\u043f\u043b\u043e\u0445\u043e \u0437\u0430\u0432\u043e\u0434", "\u0434\u043e\u043b\u0433\u043e \u0437\u0430\u0432\u043e\u0434")),
+        ("STALL", ("stall", "stalls", "\u0433\u043b\u043e\u0445", "\u0437\u0430\u0433\u043b\u043e\u0445")),
+        ("MISFIRE", ("misfire", "troits", "\u0442\u0440\u043e\u0438\u0442", "\u043f\u0440\u043e\u043f\u0443\u0441\u043a")),
+        ("VIBRATION", ("vibration", "vibrates", "\u0432\u0438\u0431\u0440\u0430\u0446")),
+        ("NOISE", ("noise", "knock", "rattle", "hum", "\u0448\u0443\u043c", "\u0441\u0442\u0443\u043a", "\u0433\u0443\u043b")),
+        ("POWER_LOSS", ("power loss", "no power", "loss of power", "doesn't pull", "under load", "\u043d\u0435 \u0442\u044f\u043d\u0435\u0442", "\u043f\u043e\u0442\u0435\u0440\u044f \u0442\u044f\u0433", "\u043d\u0430\u0433\u0440\u0443\u0437")),
+        ("OVERHEATING", ("overheat", "temperature", "\u043f\u0435\u0440\u0435\u0433\u0440\u0435", "\u0442\u0435\u043c\u043f\u0435\u0440\u0430\u0442\u0443\u0440")),
+        ("FLUID_CONSUMPTION", ("oil consumption", "burns oil", "uses oil", "\u0436\u0440\u0435\u0442 \u043c\u0430\u0441\u043b", "\u0440\u0430\u0441\u0445\u043e\u0434 \u043c\u0430\u0441\u043b")),
+        ("WARNING_DTC", ("dtc", "obd", "check engine", "\u043e\u0448\u0438\u0431", "\u0447\u0435\u043a")),
+        ("TRANSMISSION", ("transmission", "gearbox", "cvt", "atf", "\u043a\u043e\u0440\u043e\u0431\u043a", "\u0430\u043a\u043f\u043f", "\u0432\u0430\u0440\u0438\u0430\u0442\u043e\u0440")),
+        ("BRAKING", ("brake", "\u0442\u043e\u0440\u043c\u043e\u0437")),
+        ("ELECTRICAL", ("electrical", "battery", "alternator", "fuse", "\u044d\u043b\u0435\u043a\u0442\u0440", "\u0430\u043a\u043a\u0443\u043c", "\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440", "\u043f\u0440\u0435\u0434\u043e\u0445\u0440")),
+        ("SERVICE_REFERENCE", ("oil", "fluid", "coolant", "service", "\u043c\u0430\u0441\u043b\u043e", "\u0436\u0438\u0434\u043a", "\u0430\u043d\u0442\u0438\u0444\u0440\u0438\u0437", "\u0441\u0435\u0440\u0432\u0438\u0441")),
+        ("ENGINE_IDENTIFICATION", ("engine number", "identification number", "\u043d\u043e\u043c\u0435\u0440 \u0434\u0432\u0438\u0433", "\u043d\u043e\u043c\u0435\u0440 \u043c\u043e\u0442\u043e\u0440")),
+        ("PART_IDENTIFICATION", ("part number", "which part", "\u043a\u0430\u0442\u0430\u043b\u043e\u0436\u043d", "\u043a\u0430\u043a\u0430\u044f \u0434\u0435\u0442\u0430\u043b")),
+        ("HOW_TO_REFERENCE", ("how to", "manual", "\u043a\u0430\u043a ", "\u043c\u0430\u043d\u0443\u0430\u043b")),
+    )
+    for label, terms in classes:
+        if any(term in lowered for term in terms):
+            return label
+    return "OTHER"
+
+
+def _classify_search_intent(text: str, problem_class: str, previous_subject: str = "") -> str:
+    if _DTC_PATTERN.search(str(text or "")):
+        return "DIAGNOSTIC_SEARCH"
+    if _looks_like_video_request(text):
+        return "VIDEO_REFERENCE"
+    if _looks_like_visual_request(text):
+        return "IMAGE_REFERENCE"
+    if _looks_like_link_request(text) or _looks_like_reference_request(text):
+        if "manual" in _normalize_phrase(text) or "\u043c\u0430\u043d\u0443\u0430\u043b" in _normalize_phrase(text):
+            return "MANUAL_SEARCH"
+        return "REFERENCE_SEARCH"
+    if problem_class in {"ENGINE_IDENTIFICATION", "PART_IDENTIFICATION", "HOW_TO_REFERENCE", "SERVICE_REFERENCE"}:
+        return "REFERENCE_SEARCH"
+    if previous_subject and _word_count(text) <= 5 and _looks_like_reference_request(text):
+        return "REFERENCE_SEARCH"
+    return "DIAGNOSTIC_SEARCH"
+
+
+def _infer_reference_target(text: str, previous_target: str = "") -> str:
+    lowered = _normalize_phrase(text)
+    if any(term in lowered for term in ("engine number", "identification number", "\u043d\u043e\u043c\u0435\u0440 \u0434\u0432\u0438\u0433", "\u043d\u043e\u043c\u0435\u0440 \u043c\u043e\u0442\u043e\u0440")):
+        return "ENGINE_NUMBER_LOCATION"
+    if any(term in lowered for term in ("part number", "\u043a\u0430\u0442\u0430\u043b\u043e\u0436\u043d")):
+        return "PART_REFERENCE"
+    if _looks_like_visual_request(text) or _looks_like_video_request(text) or _looks_like_link_request(text):
+        return previous_target
+    return previous_target
+
+
+def _latest_reference_target(latest_context: dict | None) -> str:
+    for item in reversed((latest_context or {}).get("recent_messages") or []):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "")
+        target = _infer_reference_target(text, "")
+        if target:
+            return target
+    return ""
+
+
 def _looks_like_meta_followup(text: str, previous_assistant: str) -> bool:
     lowered = _normalize_phrase(text)
     previous = _normalize_phrase(previous_assistant)
     if not lowered:
+        return False
+    if _is_social_general_text(text):
         return False
     if _has_automotive_content(lowered) or _extract_active_car_from_text(lowered):
         return False
@@ -390,7 +526,7 @@ def _looks_like_feedback_not_helped(text: str, decision: RouterDecision) -> bool
     return bool(
         decision.user_says_not_helped
         or decision.message_type == "followup_deep"
-        or _contains_any(text, ("not helped", "did not help", "still", "\u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e", "\u0438\u0449\u0438 \u0433\u043b\u0443\u0431\u0436\u0435"))
+        or _contains_any(text, ("not helped", "did not help", "\u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e", "\u0438\u0449\u0438 \u0433\u043b\u0443\u0431\u0436\u0435"))
     )
 
 
@@ -416,6 +552,78 @@ def _assistant_asked_clarification(text: str) -> bool:
             "\u0447\u0442\u043e-\u0442\u043e \u043c\u0435\u043d\u044f\u043b\u0438",
         ),
     )
+
+
+def _pending_question(latest_context: dict | None) -> str:
+    last_assistant = str((latest_context or {}).get("last_assistant_text") or "").strip()
+    if last_assistant and ("?" in last_assistant or _assistant_asked_clarification(last_assistant)):
+        return last_assistant
+    for item in reversed((latest_context or {}).get("recent_messages") or []):
+        if not isinstance(item, dict) or str(item.get("role") or "").lower() != "assistant":
+            continue
+        text = str(item.get("text") or "").strip()
+        if text and ("?" in text or _assistant_asked_clarification(text)):
+            return text
+    return ""
+
+
+def _looks_like_case_related_reply(*, text: str, latest_context: dict | None, active_car: str, case_seed: str) -> bool:
+    if not active_car and not case_seed:
+        return False
+    if _is_social_general_text(text) or _looks_like_context_capability_question(text) or _looks_like_vehicle_profile_question(text):
+        return False
+    if _looks_like_feedback_helped(text, RouterDecision()) or _looks_like_feedback_not_helped(text, RouterDecision()):
+        return True
+    if _looks_like_reference_request(text):
+        return True
+
+    question = _pending_question(latest_context)
+    if not question:
+        return False
+
+    current = _normalize_phrase(text)
+    if not current:
+        return False
+
+    has_case_detail = _contains_case_detail(current) or _DTC_PATTERN.search(current)
+    relation_markers = (
+        "yes",
+        "no",
+        "not",
+        "cannot",
+        "can't",
+        "doesn't",
+        "still",
+        "normal",
+        "normally",
+        "same",
+        "sometimes",
+        "always",
+        "only",
+        "after",
+        "before",
+        "cold",
+        "hot",
+        "idle",
+        "unknown",
+        "don't know",
+        "not sure",
+        "\u0434\u0430",
+        "\u043d\u0435\u0442",
+        "\u043d\u043e\u0440\u043c",
+        "\u0438\u043d\u043e\u0433\u0434\u0430",
+        "\u0432\u0441\u0435\u0433\u0434\u0430",
+        "\u0442\u043e\u043b\u044c\u043a\u043e",
+        "\u043f\u043e\u0441\u043b\u0435",
+        "\u0434\u043e",
+        "\u0445\u043e\u043b\u043e\u0434",
+        "\u0433\u043e\u0440\u044f\u0447",
+        "\u0445\u043e\u043b\u043e\u0441\u0442",
+        "\u043d\u0435 \u0437\u043d\u0430\u044e",
+    )
+    has_relation_language = any(marker in current for marker in relation_markers)
+    concise_answer = _word_count(current) <= 14 and not current.endswith("?")
+    return bool(has_case_detail or (concise_answer and has_relation_language))
 
 
 def _contains_case_detail(text: str) -> bool:
@@ -635,12 +843,28 @@ async def _natural_chat_text(
     return _plain_text_response(reply or fallback)
 
 
-def _clarification_text(*, language: str, active_car: str, symptom: str, stage: int = 1) -> str:
+def _clarification_text(*, language: str, active_car: str, symptom: str, problem_class: str = "OTHER", stage: int = 1) -> str:
     car = f" \u043f\u043e {active_car}" if language == "ru" and active_car else f" on {active_car}" if active_car else ""
     if language == "ru":
+        if problem_class == "NO_START":
+            return f"\u041f\u043e\u043d\u044f\u043b{car}. \u0421\u0442\u0430\u0440\u0442\u0435\u0440 \u043a\u0440\u0443\u0442\u0438\u0442 \u0434\u0432\u0438\u0433\u0430\u0442\u0435\u043b\u044c, \u0438\u043b\u0438 \u0432\u043e\u043e\u0431\u0449\u0435 \u043d\u0435\u0442 \u043f\u0440\u043e\u043a\u0440\u0443\u0442\u043a\u0438?"
+        if problem_class == "VIBRATION":
+            return f"\u041f\u043e\u043d\u044f\u043b{car}. \u0413\u0434\u0435 \u0432\u0438\u0431\u0440\u0430\u0446\u0438\u044f \u0441\u0438\u043b\u044c\u043d\u0435\u0435: \u043d\u0430 \u0445\u043e\u043b\u043e\u0441\u0442\u044b\u0445, \u043d\u0430 \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u0438, \u043f\u0440\u0438 \u0440\u0430\u0437\u0433\u043e\u043d\u0435 \u0438\u043b\u0438 \u043f\u043e\u0434 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439?"
+        if problem_class == "NOISE":
+            return f"\u041f\u043e\u043d\u044f\u043b{car}. \u0428\u0443\u043c \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u0431\u043e\u043b\u044c\u0448\u0435 \u043e\u0442 \u043e\u0431\u043e\u0440\u043e\u0442\u043e\u0432 \u0434\u0432\u0438\u0433\u0430\u0442\u0435\u043b\u044f \u0438\u043b\u0438 \u043e\u0442 \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u0438 \u043c\u0430\u0448\u0438\u043d\u044b?"
+        if problem_class == "POWER_LOSS":
+            return f"\u041f\u043e\u043d\u044f\u043b{car}. \u0422\u044f\u0433\u0430 \u043f\u0440\u043e\u043f\u0430\u0434\u0430\u0435\u0442 \u043d\u0430 \u0445\u043e\u043b\u043e\u0434\u043d\u0443\u044e, \u043d\u0430 \u0433\u043e\u0440\u044f\u0447\u0443\u044e, \u043f\u043e\u0434 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439 \u0438\u043b\u0438 \u0432\u0441\u0435\u0433\u0434\u0430?"
         if stage >= 2 or _contains_case_detail(symptom):
             return f"\u041f\u0440\u0438\u043d\u044f\u043b{car}. \u0415\u0441\u0442\u044c \u043b\u0438 \u043e\u0448\u0438\u0431\u043a\u0438/DTC \u0438\u043b\u0438 \u0447\u0442\u043e-\u0442\u043e \u043c\u0435\u043d\u044f\u043b\u0438 \u043f\u0435\u0440\u0435\u0434 \u0442\u0435\u043c, \u043a\u0430\u043a \u044d\u0442\u043e \u043d\u0430\u0447\u0430\u043b\u043e\u0441\u044c?"
         return f"\u041f\u043e\u043d\u044f\u043b \u043a\u0435\u0439\u0441{car}. \u0423\u0442\u043e\u0447\u043d\u0438 \u043e\u0434\u0438\u043d \u043c\u043e\u043c\u0435\u043d\u0442: \u043a\u043e\u0433\u0434\u0430 \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f - \u043d\u0430 \u0445\u043e\u043b\u043e\u0434\u043d\u0443\u044e, \u043d\u0430 \u0433\u043e\u0440\u044f\u0447\u0443\u044e, \u043d\u0430 \u0445\u043e\u043b\u043e\u0441\u0442\u044b\u0445, \u043f\u043e\u0434 \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439 \u0438\u043b\u0438 \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u043c\u0435\u043d\u044b?"
+    if problem_class == "NO_START":
+        return f"Understood{car}. Does the starter crank the engine, or is there no crank at all?"
+    if problem_class == "VIBRATION":
+        return f"Got it{car}. Is the vibration strongest at idle, at road speed, during acceleration, or under load?"
+    if problem_class == "NOISE":
+        return f"Got it{car}. Does the noise follow engine RPM or vehicle speed?"
+    if problem_class == "POWER_LOSS":
+        return f"Got it{car}. Is the power loss cold, hot, under load, or present all the time?"
     if stage >= 2 or _contains_case_detail(symptom):
         return f"Understood{car}. Are there any DTCs or recent repairs/replacements before it started?"
     return f"Got the case{car}. What is the single most useful condition: cold, hot, idle, under load, or after a recent repair?"
@@ -652,6 +876,31 @@ def _fallback_diagnostic_text(*, language: str, active_car: str, symptom: str) -
         return f"\u041f\u043e\u043a\u0430 \u0434\u0430\u043c \u0431\u0430\u0437\u043e\u0432\u044b\u0439 \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440{car}: \u043f\u0440\u043e\u0432\u0435\u0440\u044c \u043e\u0448\u0438\u0431\u043a\u0438, \u0440\u0430\u0437\u044a\u0435\u043c\u044b, \u0436\u0438\u0434\u043a\u043e\u0441\u0442\u0438 \u0438 \u0443\u0441\u043b\u043e\u0432\u0438\u044f, \u043a\u043e\u0433\u0434\u0430 \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f \u0441\u0438\u043c\u043f\u0442\u043e\u043c: {symptom}."
     car = f" on {active_car}" if active_car else ""
     return f"Initial direction{car}: check DTCs, connectors, fluids, and the exact conditions when this happens: {symptom}."
+
+
+def _reference_answer_text(*, language: str, context: FastChatContext, links: list[dict], summary: str = "", reused: bool = False) -> str:
+    subject = context.reference_target.replace("_", " ").lower() or context.current_subject.replace("_", " ").lower() or context.current_symptom
+    if language == "ru":
+        intro = "\u041d\u0430\u0448\u0435\u043b \u0432 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043d\u044b\u0445 \u043c\u0430\u0442\u0435\u0440\u0438\u0430\u043b\u0430\u0445" if reused else "\u041d\u0430\u0448\u0435\u043b \u0440\u0435\u0430\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438"
+        lines = [f"{intro} \u043f\u043e \u044d\u0442\u043e\u0439 \u0442\u0435\u043c\u0435: {subject}."]
+        if summary:
+            lines.append(summary)
+        for item in links[:4]:
+            title = str(item.get("title") or item.get("url") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if title and url:
+                lines.append(f"{title}: {url}")
+        return "\n".join(lines)
+    intro = "I found this in saved PULS material" if reused else "I found real reference links"
+    lines = [f"{intro} for the same subject: {subject}."]
+    if summary:
+        lines.append(summary)
+    for item in links[:4]:
+        title = str(item.get("title") or item.get("url") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if title and url:
+            lines.append(f"{title}: {url}")
+    return "\n".join(lines)
 
 
 def _question_tail(language: str) -> str:
@@ -775,6 +1024,8 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         or _looks_like_context_capability_question(text)
         or _looks_like_vehicle_profile_question(text)
     )
+    previous_reference_target = _latest_reference_target(latest_context)
+    explicit_reference = _looks_like_reference_request(text)
 
     mode = "GENERAL_CHAT"
     if wants_context_or_profile:
@@ -783,6 +1034,8 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         mode = "FEEDBACK"
     elif _looks_like_feedback_not_helped(text, decision):
         mode = "FEEDBACK"
+    elif explicit_reference:
+        mode = "REFERENCE_REQUEST"
     elif _looks_like_source_question(text) or _looks_like_detail_request(text):
         mode = "KNOWLEDGE_REQUEST"
     elif decision.message_type == "general" and not _has_automotive_content(text):
@@ -808,9 +1061,20 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         normalized = normalized.model_copy(update={"car_info": active_car})
 
     case_seed = _build_case_seed(latest_context, getattr(user, "conversation_history", "") or "", text)
+    if mode == "GENERAL_CHAT" and _looks_like_case_related_reply(
+        text=text,
+        latest_context=latest_context,
+        active_car=active_car,
+        case_seed=case_seed,
+    ):
+        mode = "AUTOMOTIVE_CONTINUATION"
     current_symptom = case_seed if mode in {"AUTOMOTIVE_CONTINUATION", "FEEDBACK"} else text
-    if mode in {"KNOWLEDGE_REQUEST", "META_CHAT"}:
+    if mode in {"KNOWLEDGE_REQUEST", "REFERENCE_REQUEST", "META_CHAT"}:
         current_symptom = case_seed or text
+    problem_class = _classify_problem(" ".join(part for part in (case_seed, text) if part))
+    reference_target = _infer_reference_target(text, previous_reference_target)
+    current_subject = reference_target or (problem_class if problem_class != "OTHER" else "")
+    search_intent = _classify_search_intent(text, problem_class, current_subject)
 
     messages = (latest_context or {}).get("recent_messages") or []
     clarification_count = sum(
@@ -824,11 +1088,11 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
     if _looks_like_feedback_not_helped(text, decision) or _looks_like_detail_request(text):
         enough = True
 
-    needs_clarification = mode in {"AUTOMOTIVE_NEW_CASE", "AUTOMOTIVE_CONTINUATION"} and not enough
+    needs_clarification = mode in {"AUTOMOTIVE_NEW_CASE", "AUTOMOTIVE_CONTINUATION"} and search_intent == "DIAGNOSTIC_SEARCH" and not enough
     if clarification_count >= 2 and _contains_case_detail(current_symptom):
         needs_clarification = False
 
-    should_search = mode in {"AUTOMOTIVE_NEW_CASE", "AUTOMOTIVE_CONTINUATION", "VEHICLE_SWITCH", "KNOWLEDGE_REQUEST", "FEEDBACK"} and not needs_clarification
+    should_search = mode in {"AUTOMOTIVE_NEW_CASE", "AUTOMOTIVE_CONTINUATION", "VEHICLE_SWITCH", "KNOWLEDGE_REQUEST", "REFERENCE_REQUEST", "FEEDBACK"} and not needs_clarification
     should_deep_search = _looks_like_feedback_not_helped(text, decision) or _looks_like_detail_request(text) or decision.deep_search
 
     context = FastChatContext(
@@ -837,6 +1101,11 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         active_car=active_car,
         vehicle_id=vehicle_id,
         current_symptom=current_symptom,
+        previous_symptom=_latest_non_social_user_text(latest_context, getattr(user, "conversation_history", "") or ""),
+        problem_class=problem_class,
+        search_intent=search_intent,
+        current_subject=current_subject,
+        reference_target=reference_target,
         case_seed=case_seed,
         user_facts=[text] if mode not in {"GENERAL_CHAT", "META_CHAT"} and text else [],
         evidence_links=[],
@@ -943,6 +1212,81 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 links=localized_links,
             )
 
+    if context.search_intent in {"REFERENCE_SEARCH", "MANUAL_SEARCH", "IMAGE_REFERENCE", "VIDEO_REFERENCE"}:
+        reusable_links = find_reusable_media(
+            user_id=user.id,
+            vehicle_id=context.vehicle_id,
+            subject=" ".join(
+                part
+                for part in (context.active_car, context.reference_target, context.current_subject, context.current_symptom)
+                if part
+            ),
+            intent=context.search_intent,
+        )
+        if reusable_links:
+            answer_text = _reference_answer_text(
+                language=context.language,
+                context=context,
+                links=reusable_links,
+                reused=True,
+            )
+            return await _persist_and_return(
+                user=user,
+                normalized=normalized,
+                answer_text=answer_text,
+                context=context,
+                message_type="general",
+                links=reusable_links,
+            )
+        try:
+            reference_result = await search_reference(
+                active_vehicle=context.active_car,
+                current_subject=context.current_subject or context.current_symptom,
+                reference_target=context.reference_target,
+                user_text=normalized.text,
+                language=context.language,
+                intent=context.search_intent,
+            )
+            links = await _localize_links(reference_result.get("links") or [], context.language)
+            upsert_reference_media(
+                user_id=user.id,
+                vehicle=resolved_vehicle,
+                links=links,
+                subject=context.current_subject or context.current_symptom,
+                reference_target=context.reference_target,
+                language=context.language,
+            )
+            answer_text = _reference_answer_text(
+                language=context.language,
+                context=context,
+                links=links,
+                summary=str(reference_result.get("summary") or ""),
+                reused=False,
+            )
+            return await _persist_and_return(
+                user=user,
+                normalized=normalized,
+                answer_text=answer_text,
+                context=context,
+                message_type="kb_match",
+                links=links,
+                parsed_case={"reference_search": reference_result.get("raw") or {}, "links": links},
+                should_decrease_limit=False,
+            )
+        except ReferenceSearchUnavailableError:
+            answer_text = (
+                "\u041f\u043e\u043d\u044f\u043b \u0442\u0435\u043c\u0443, \u043d\u043e \u043f\u043e\u043a\u0430 \u043d\u0435 \u043d\u0430\u0448\u0435\u043b \u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u043d\u0430\u0434\u0435\u0436\u043d\u044b\u0445 \u0441\u0441\u044b\u043b\u043e\u043a. \u041c\u043e\u0433\u0443 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c, \u0435\u0441\u043b\u0438 \u0443\u0442\u043e\u0447\u043d\u0438\u0448\u044c \u043a\u0443\u0437\u043e\u0432, \u0434\u0432\u0438\u0433\u0430\u0442\u0435\u043b\u044c \u0438\u043b\u0438 \u043d\u0443\u0436\u043d\u044b\u0439 \u0443\u0437\u0435\u043b."
+                if context.language == "ru"
+                else "I understand the subject, but I did not find a reliable reusable link yet. A body, engine, or component detail would narrow it down."
+            )
+            return await _persist_and_return(
+                user=user,
+                normalized=normalized,
+                answer_text=answer_text,
+                context=context,
+                message_type="clarification",
+            )
+
     if _looks_like_feedback_helped(normalized.text, decision):
         feedback_state = context
         matched_feedback_case = await find_latest_case_for_feedback(feedback_state)
@@ -970,6 +1314,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
             language=context.language,
             active_car=context.active_car,
             symptom=context.current_symptom,
+            problem_class=context.problem_class,
             stage=stage,
         )
         answer_text = await _natural_chat_text(
@@ -1170,6 +1515,7 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         language=context.language,
         active_car=context.active_car,
         symptom=context.current_symptom,
+        problem_class=context.problem_class,
     )
     answer_text = await _natural_chat_text(
         mode="CLARIFICATION",

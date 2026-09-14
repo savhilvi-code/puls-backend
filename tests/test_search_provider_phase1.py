@@ -152,7 +152,6 @@ class SearchProviderPhase1Tests(unittest.TestCase):
         with (
             patch.object(parser_engine, "_remote_parser_url", return_value="https://remote.example/search"),
             patch.object(parser_engine, "_call_remote_parser", new=AsyncMock(side_effect=RuntimeError("remote down"))),
-            patch.object(parser_engine, "_legacy_1g_gze_airflow_result", return_value=None),
             patch.object(parser_engine.logger, "exception"),
             patch.object(parser_engine, "run_search_provider", return_value=_parser_payload("local ok")) as provider_call,
         ):

@@ -81,6 +81,8 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         history_match=None,
         parser_case=None,
         natural_reply=None,
+        reusable_media=None,
+        reference_result=None,
     ):
         captured = {}
         kb = AsyncMock(return_value=kb_match)
@@ -88,6 +90,12 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         parser = AsyncMock(return_value=parser_case or _parser_case())
         provider = Mock(return_value=None)
         route = AsyncMock(return_value=decision or _decision())
+        reference_search = AsyncMock(return_value=reference_result or {
+            "summary": "Reference summary",
+            "links": [{"title": "Reference", "url": "https://example.com/reference", "description": "", "type": "link"}],
+            "raw": {},
+        })
+        reference_upsert = Mock(return_value=[])
         async def fake_natural_chat(**kwargs):
             if natural_reply is not None:
                 return natural_reply
@@ -118,6 +126,9 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
             patch.object(decision_engine, "find_matching_history_case", new=history),
             patch.object(decision_engine, "find_latest_case_for_feedback", new=AsyncMock(return_value=None)),
             patch.object(decision_engine, "increment_case_success", new=AsyncMock()),
+            patch.object(decision_engine, "find_reusable_media", Mock(return_value=reusable_media or [])) as reusable_lookup,
+            patch.object(decision_engine, "upsert_reference_media", reference_upsert),
+            patch.object(decision_engine, "search_reference", new=reference_search),
             patch.object(decision_engine, "can_run_parser", return_value=(True, {"requests_remaining": 5})),
             patch.object(decision_engine, "parse_diagnostic", new=parser),
             patch.object(decision_engine, "run_diagnostic_provider", new=provider),
@@ -130,6 +141,9 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
                 decision_engine.process_chat_message({"message": message, "language": (decision or _decision()).language}, source="web")
             )
         captured["natural_chat"] = natural_chat
+        captured["reference_search"] = reference_search
+        captured["reusable_lookup"] = reusable_lookup
+        captured["reference_upsert"] = reference_upsert
         return response, captured, kb, history, parser, provider, route
 
     def test_active_case_social_turn_skips_heavy_work_and_preserves_nissan(self):
@@ -806,6 +820,194 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
                 asyncio.run(decision_engine.process_chat_message({"message": "Toyota vibrates", "language": "en"}, source="web"))
 
         self.assertEqual(captured, {})
+
+    def test_generic_no_start_and_vibration_use_different_clarifications(self):
+        no_start, no_start_capture, *_ = self._run_chat(
+            message="BrandA ModelB 2012 EngineD does not start after long parking",
+            latest_context=_latest_context(),
+            decision=_decision(language="en"),
+        )
+        vibration, vibration_capture, *_ = self._run_chat(
+            message="BrandA ModelB 2012 EngineD vibrates during acceleration",
+            latest_context=_latest_context(),
+            decision=_decision(language="en"),
+        )
+
+        self.assertIn("starter crank", no_start.answer.lower())
+        self.assertIn("vibration", vibration.answer.lower())
+        self.assertNotEqual(no_start.answer, vibration.answer)
+        self.assertFalse(no_start_capture["update"]["should_decrease_limit"])
+        self.assertFalse(vibration_capture["update"]["should_decrease_limit"])
+
+    def test_short_answer_after_pending_question_continues_active_case(self):
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            last_assistant_text="Does the starter crank the engine, or is there no crank at all?",
+            recent_messages=[
+                {"role": "user", "text": "BrandA ModelB 2012 EngineD does not start after long parking"},
+                {"role": "assistant", "text": "Does the starter crank the engine, or is there no crank at all?"},
+            ],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="it turns but still will not start",
+            latest_context=latest,
+            decision=_general_decision(""),
+        )
+
+        self.assertNotEqual(captured["update"]["message_type"], "general")
+        self.assertIn("BrandA ModelB 2012 EngineD does not start after long parking", captured["update"]["symptom"])
+        self.assertFalse(parser.called)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_additional_fact_after_pending_question_stays_on_same_case(self):
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            last_assistant_text="When does it happen?",
+            recent_messages=[
+                {"role": "user", "text": "BrandA ModelB 2012 EngineD vibrates"},
+                {"role": "assistant", "text": "When does it happen?"},
+            ],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="only after long parking and on cold start",
+            latest_context=latest,
+            decision=_general_decision(""),
+        )
+
+        self.assertNotEqual(captured["update"]["message_type"], "general")
+        self.assertIn("BrandA ModelB 2012 EngineD vibrates", captured["update"]["symptom"])
+        self.assertIn("only after long parking", captured["update"]["symptom"])
+
+    def test_social_phrase_after_pending_question_stays_general(self):
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            last_assistant_text="Does the starter crank the engine, or is there no crank at all?",
+            recent_messages=[
+                {"role": "user", "text": "BrandA ModelB 2012 EngineD does not start"},
+                {"role": "assistant", "text": "Does the starter crank the engine, or is there no crank at all?"},
+            ],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="how are you?",
+            latest_context=latest,
+            decision=_general_decision(""),
+            natural_reply="Doing fine.",
+        )
+
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertEqual(response.answer, "Doing fine.")
+        self.assertFalse(parser.called)
+
+    def test_reload_short_answer_continues_reconstructed_case(self):
+        history = (
+            "source: web\n"
+            "message_type: parser\n"
+            "active_car: BrandA ModelB 2012 EngineD\n"
+            "symptom: BrandA ModelB 2012 EngineD does not start after long parking\n"
+            "user: BrandA ModelB 2012 EngineD does not start after long parking\n"
+            "assistant: Does the starter crank the engine, or is there no crank at all?"
+        )
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            last_assistant_text="Does the starter crank the engine, or is there no crank at all?",
+            recent_messages=[
+                {"role": "user", "text": "BrandA ModelB 2012 EngineD does not start after long parking"},
+                {"role": "assistant", "text": "Does the starter crank the engine, or is there no crank at all?"},
+            ],
+        )
+        response, captured, kb, history_match, parser, provider, route = self._run_chat(
+            message="I do not know",
+            latest_context=latest,
+            user=_user(history=history, car_info="BrandA ModelB 2012 EngineD"),
+            decision=_general_decision(""),
+        )
+
+        self.assertNotEqual(captured["update"]["message_type"], "general")
+        self.assertIn("does not start after long parking", captured["update"]["symptom"])
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_reference_subject_survives_short_followups_without_parser(self):
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            recent_messages=[
+                {"role": "user", "text": "BrandA ModelB 2012 EngineD where is the engine identification number?"},
+                {"role": "assistant", "text": "It is on the engine block near a stamped pad."},
+                {"role": "user", "text": "thanks"},
+                {"role": "assistant", "text": "You are welcome."},
+            ],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="any video?",
+            latest_context=latest,
+            decision=_decision(language="en", message_type="general", ready_to_search=False),
+            reference_result={
+                "summary": "Video reference for the stamped engine number location.",
+                "links": [{"title": "Engine number location video", "url": "https://www.youtube.com/watch?v=abc123", "description": "", "type": "video"}],
+                "raw": {},
+            },
+        )
+
+        self.assertFalse(parser.called)
+        self.assertFalse(kb.called)
+        self.assertEqual(captured["reference_search"].call_args.kwargs["intent"], "VIDEO_REFERENCE")
+        self.assertEqual(captured["reference_search"].call_args.kwargs["reference_target"], "ENGINE_NUMBER_LOCATION")
+        self.assertIn("youtube.com/watch?v=abc123", response.answer)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_reference_media_reuse_skips_external_search(self):
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            recent_messages=[{"role": "user", "text": "where is the engine identification number?"}],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="show me",
+            latest_context=latest,
+            decision=_decision(language="en", message_type="general", ready_to_search=False),
+            reusable_media=[{"title": "Saved engine number photo", "url": "https://example.com/engine-number.jpg", "description": "engine number", "type": "image"}],
+        )
+
+        self.assertFalse(parser.called)
+        self.assertFalse(captured["reference_search"].called)
+        self.assertEqual(captured["reusable_lookup"].call_args.kwargs["intent"], "IMAGE_REFERENCE")
+        self.assertIn("saved PULS material", response.answer)
+        self.assertEqual(response.links[0].type, "image")
+
+    def test_external_reference_search_promotes_shared_media_without_quota(self):
+        latest = _latest_context(
+            active_car="BrandA ModelB 2012 EngineD",
+            recent_messages=[{"role": "user", "text": "where is the engine identification number?"}],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="another image",
+            latest_context=latest,
+            decision=_decision(language="en", message_type="general", ready_to_search=False),
+            reference_result={
+                "summary": "image reference",
+                "links": [{"title": "Public image", "url": "https://example.com/engine-number.jpg", "description": "engine number", "type": "image"}],
+                "raw": {},
+            },
+        )
+
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["reference_search"].call_count, 1)
+        self.assertEqual(captured["reference_upsert"].call_count, 1)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_parser_evidence_does_not_become_confirmed_user_fact(self):
+        parser_case = _parser_case(
+            summary="Forum evidence mentions smoke, but user did not say smoke.",
+            extracted_cases=[{"cause": "Forum smoke symptom", "solution": "Check evidence only"}],
+        )
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="BrandA ModelB 2012 EngineD vibrates under load after repair P0300",
+            latest_context=_latest_context(),
+            decision=_decision(language="en"),
+            parser_case=parser_case,
+        )
+
+        self.assertTrue(parser.called)
+        self.assertEqual(captured["update"]["symptom"], "BrandA ModelB 2012 EngineD vibrates under load after repair P0300")
+        self.assertNotIn("smoke", captured["update"]["symptom"].lower())
 
 
 if __name__ == "__main__":
