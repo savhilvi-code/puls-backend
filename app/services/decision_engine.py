@@ -19,7 +19,7 @@ from app.services.kb_service import (
 from app.services.normalize_service import normalize_chat_input
 from app.services.openai_service import OpenAIRouterUnavailableError, generate_natural_chat_reply, translate_segments
 from app.services.parser_service import ParserUnavailableError, parse_diagnostic
-from app.services.puls_data_service import find_reusable_media, resolve_user_vehicle
+from app.services.puls_data_service import find_reusable_media, resolve_user_vehicle, upsert_reference_media
 from app.services.reference_search_service import ReferenceSearchUnavailableError, search_reference
 from app.services.response_source_service import filter_response_sources
 from app.services.router_service import route_message
@@ -371,6 +371,8 @@ def _looks_like_meta_followup(text: str, previous_assistant: str) -> bool:
     previous = _normalize_phrase(previous_assistant)
     if not lowered:
         return False
+    if _is_social_general_text(text):
+        return False
     if _has_automotive_content(lowered) or _extract_active_car_from_text(lowered):
         return False
 
@@ -524,7 +526,7 @@ def _looks_like_feedback_not_helped(text: str, decision: RouterDecision) -> bool
     return bool(
         decision.user_says_not_helped
         or decision.message_type == "followup_deep"
-        or _contains_any(text, ("not helped", "did not help", "still", "\u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e", "\u0438\u0449\u0438 \u0433\u043b\u0443\u0431\u0436\u0435"))
+        or _contains_any(text, ("not helped", "did not help", "\u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e", "\u0438\u0449\u0438 \u0433\u043b\u0443\u0431\u0436\u0435"))
     )
 
 
@@ -550,6 +552,78 @@ def _assistant_asked_clarification(text: str) -> bool:
             "\u0447\u0442\u043e-\u0442\u043e \u043c\u0435\u043d\u044f\u043b\u0438",
         ),
     )
+
+
+def _pending_question(latest_context: dict | None) -> str:
+    last_assistant = str((latest_context or {}).get("last_assistant_text") or "").strip()
+    if last_assistant and ("?" in last_assistant or _assistant_asked_clarification(last_assistant)):
+        return last_assistant
+    for item in reversed((latest_context or {}).get("recent_messages") or []):
+        if not isinstance(item, dict) or str(item.get("role") or "").lower() != "assistant":
+            continue
+        text = str(item.get("text") or "").strip()
+        if text and ("?" in text or _assistant_asked_clarification(text)):
+            return text
+    return ""
+
+
+def _looks_like_case_related_reply(*, text: str, latest_context: dict | None, active_car: str, case_seed: str) -> bool:
+    if not active_car and not case_seed:
+        return False
+    if _is_social_general_text(text) or _looks_like_context_capability_question(text) or _looks_like_vehicle_profile_question(text):
+        return False
+    if _looks_like_feedback_helped(text, RouterDecision()) or _looks_like_feedback_not_helped(text, RouterDecision()):
+        return True
+    if _looks_like_reference_request(text):
+        return True
+
+    question = _pending_question(latest_context)
+    if not question:
+        return False
+
+    current = _normalize_phrase(text)
+    if not current:
+        return False
+
+    has_case_detail = _contains_case_detail(current) or _DTC_PATTERN.search(current)
+    relation_markers = (
+        "yes",
+        "no",
+        "not",
+        "cannot",
+        "can't",
+        "doesn't",
+        "still",
+        "normal",
+        "normally",
+        "same",
+        "sometimes",
+        "always",
+        "only",
+        "after",
+        "before",
+        "cold",
+        "hot",
+        "idle",
+        "unknown",
+        "don't know",
+        "not sure",
+        "\u0434\u0430",
+        "\u043d\u0435\u0442",
+        "\u043d\u043e\u0440\u043c",
+        "\u0438\u043d\u043e\u0433\u0434\u0430",
+        "\u0432\u0441\u0435\u0433\u0434\u0430",
+        "\u0442\u043e\u043b\u044c\u043a\u043e",
+        "\u043f\u043e\u0441\u043b\u0435",
+        "\u0434\u043e",
+        "\u0445\u043e\u043b\u043e\u0434",
+        "\u0433\u043e\u0440\u044f\u0447",
+        "\u0445\u043e\u043b\u043e\u0441\u0442",
+        "\u043d\u0435 \u0437\u043d\u0430\u044e",
+    )
+    has_relation_language = any(marker in current for marker in relation_markers)
+    concise_answer = _word_count(current) <= 14 and not current.endswith("?")
+    return bool(has_case_detail or (concise_answer and has_relation_language))
 
 
 def _contains_case_detail(text: str) -> bool:
@@ -987,6 +1061,13 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         normalized = normalized.model_copy(update={"car_info": active_car})
 
     case_seed = _build_case_seed(latest_context, getattr(user, "conversation_history", "") or "", text)
+    if mode == "GENERAL_CHAT" and _looks_like_case_related_reply(
+        text=text,
+        latest_context=latest_context,
+        active_car=active_car,
+        case_seed=case_seed,
+    ):
+        mode = "AUTOMOTIVE_CONTINUATION"
     current_symptom = case_seed if mode in {"AUTOMOTIVE_CONTINUATION", "FEEDBACK"} else text
     if mode in {"KNOWLEDGE_REQUEST", "REFERENCE_REQUEST", "META_CHAT"}:
         current_symptom = case_seed or text
@@ -1167,6 +1248,14 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
                 intent=context.search_intent,
             )
             links = await _localize_links(reference_result.get("links") or [], context.language)
+            upsert_reference_media(
+                user_id=user.id,
+                vehicle=resolved_vehicle,
+                links=links,
+                subject=context.current_subject or context.current_symptom,
+                reference_target=context.reference_target,
+                language=context.language,
+            )
             answer_text = _reference_answer_text(
                 language=context.language,
                 context=context,

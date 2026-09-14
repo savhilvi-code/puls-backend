@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 VIDEO_DOMAINS = ("youtube.com", "youtu.be", "rutube.ru", "vimeo.com")
+STORAGE_MEDIA_TYPES = {"photo", "video", "audio", "document"}
+
+
+def normalize_media_type(provider_type: str) -> str:
+    value = str(provider_type or "").strip().lower()
+    if value in {"image", "img", "picture"}:
+        return "photo"
+    if value in {"webpage", "page", "manual", "link"}:
+        return "document"
+    if value in STORAGE_MEDIA_TYPES:
+        return value
+    return ""
 
 
 def normalize_links(links: list[dict] | None) -> list[dict]:
