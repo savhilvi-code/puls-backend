@@ -80,6 +80,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         kb_match=None,
         history_match=None,
         parser_case=None,
+        natural_reply=None,
     ):
         captured = {}
         kb = AsyncMock(return_value=kb_match)
@@ -87,6 +88,20 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         parser = AsyncMock(return_value=parser_case or _parser_case())
         provider = Mock(return_value=None)
         route = AsyncMock(return_value=decision or _decision())
+        async def fake_natural_chat(**kwargs):
+            if natural_reply is not None:
+                return natural_reply
+            mode = kwargs.get("mode")
+            if mode == "GENERAL_CHAT":
+                return "\u041d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e, \u044f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438."
+            if mode == "META_CHAT":
+                vehicle = kwargs.get("active_vehicle") or ""
+                return f"\u042f \u043f\u0440\u043e \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043c\u0430\u0448\u0438\u043d\u044b {vehicle}: \u0438\u0441\u0442\u043e\u0440\u0438\u044f \u044d\u0442\u043e\u0433\u043e \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0430 \u0443 \u043c\u0435\u043d\u044f \u0432 \u0444\u043e\u043d\u0435."
+            if mode == "CLARIFICATION":
+                return kwargs.get("pending_clarification") or "\u041e\u0434\u0438\u043d \u0432\u043e\u043f\u0440\u043e\u0441?"
+            return "\u041e\u0442\u0432\u0435\u0442."
+
+        natural_chat = AsyncMock(side_effect=fake_natural_chat)
 
         async def fake_update(*args, **kwargs):
             captured["update"] = kwargs
@@ -106,6 +121,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
             patch.object(decision_engine, "can_run_parser", return_value=(True, {"requests_remaining": 5})),
             patch.object(decision_engine, "parse_diagnostic", new=parser),
             patch.object(decision_engine, "run_diagnostic_provider", new=provider),
+            patch.object(decision_engine, "generate_natural_chat_reply", new=natural_chat),
             patch.object(decision_engine, "translate_segments", new=fake_translate),
             patch.object(decision_engine, "update_user_after_response", new=fake_update),
             patch.object(decision_engine, "ensure_user_subscription"),
@@ -113,6 +129,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
             response = asyncio.run(
                 decision_engine.process_chat_message({"message": message, "language": (decision or _decision()).language}, source="web")
             )
+        captured["natural_chat"] = natural_chat
         return response, captured, kb, history, parser, provider, route
 
     def test_active_case_social_turn_skips_heavy_work_and_preserves_nissan(self):
@@ -141,6 +158,56 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(captured["update"]["message_type"], "general")
         self.assertEqual(captured["update"]["active_car"], nissan)
         self.assertEqual(captured["update"]["vehicle_id"], 20)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        captured["natural_chat"].assert_called_once()
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "GENERAL_CHAT")
+
+    def test_greeting_uses_natural_chat_without_parser_or_quota(self):
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u043f\u0440\u0438\u0432\u0435\u0442",
+            latest_context=_latest_context(),
+            user=_user(),
+            decision=_general_decision(""),
+        )
+
+        self.assertTrue(response.answer.strip())
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        captured["natural_chat"].assert_called_once()
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "GENERAL_CHAT")
+
+    def test_non_automotive_question_stays_general_even_if_router_is_overeager(self):
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u0447\u0442\u043e \u043d\u043e\u0432\u043e\u0433\u043e?",
+            latest_context=_latest_context(active_car="Nissan X-Trail 2003 SR20VET"),
+            user=_user(car_info="Nissan X-Trail 2003 SR20VET"),
+            decision=_decision(message_type="new_diagnostic", ready_to_search=True, symptom="\u0447\u0442\u043e \u043d\u043e\u0432\u043e\u0433\u043e?"),
+        )
+
+        self.assertTrue(response.answer.strip())
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "GENERAL_CHAT")
+
+    def test_plain_text_chat_response_strips_markdown_syntax(self):
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u043f\u0440\u0438\u0432\u0435\u0442",
+            latest_context=_latest_context(),
+            user=_user(),
+            decision=_general_decision(""),
+            natural_reply="### **\u041f\u0440\u0438\u0432\u0435\u0442**\n\n- \u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438.",
+        )
+
+        self.assertNotIn("**", response.answer)
+        self.assertNotIn("###", response.answer)
+        self.assertFalse(response.answer.lstrip().startswith("- "))
         self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_active_case_meta_context_question_skips_automotive_pipeline(self):
@@ -174,6 +241,8 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(captured["update"]["message_type"], "general")
         self.assertEqual(captured["update"]["active_car"], nissan)
         self.assertFalse(captured["update"]["should_decrease_limit"])
+        captured["natural_chat"].assert_called_once()
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "META_CHAT")
 
     def test_meta_what_do_you_mean_answers_prior_statement_without_pipeline(self):
         latest = _latest_context(
@@ -198,6 +267,8 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertFalse(parser.called)
         self.assertFalse(provider.called)
         self.assertFalse(captured["update"]["should_decrease_limit"])
+        captured["natural_chat"].assert_called_once()
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "META_CHAT")
 
     def test_after_meta_turn_automotive_reply_resumes_context(self):
         nissan = "Nissan X-Trail 2003 SR20VET"
