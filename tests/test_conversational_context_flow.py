@@ -179,6 +179,62 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         captured["natural_chat"].assert_called_once()
         self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "GENERAL_CHAT")
 
+    def test_greeting_with_persisted_nissan_context_does_not_mention_vehicle(self):
+        latest = _latest_context(
+            active_car="Nissan X-Trail 2003 SR20VET",
+            last_user_text="Nissan X-Trail 2003 SR20VET \u0442\u0440\u043e\u0438\u0442",
+            last_assistant_text="\u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043d\u0435 \u043f\u043e\u0442\u0435\u0440\u044f\u043b.",
+            recent_messages=[
+                {"role": "user", "text": "Nissan X-Trail 2003 SR20VET \u0442\u0440\u043e\u0438\u0442"},
+                {"role": "assistant", "text": "\u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043d\u0435 \u043f\u043e\u0442\u0435\u0440\u044f\u043b."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u043f\u0440\u0438\u0432\u0435\u0442",
+            latest_context=latest,
+            decision=_general_decision(""),
+            natural_reply="\u041f\u0440\u0438\u0432\u0435\u0442! \u041a\u0430\u043a \u0434\u0435\u043b\u0430?",
+        )
+
+        self.assertIn("\u041f\u0440\u0438\u0432\u0435\u0442", response.answer)
+        self.assertNotIn("Nissan", response.answer)
+        self.assertNotIn("\u041a\u043e\u0440\u043e\u0442\u043a\u0438\u0439 \u0434\u0438\u0430\u0433\u043d\u043e\u0437", response.answer)
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        natural_kwargs = captured["natural_chat"].call_args.kwargs
+        self.assertEqual(natural_kwargs["mode"], "GENERAL_CHAT")
+        self.assertEqual(natural_kwargs["active_vehicle"], "")
+        self.assertEqual(natural_kwargs["recent_conversation"], [])
+        self.assertFalse(natural_kwargs["context_relevant"])
+
+    def test_general_small_talk_with_persisted_nissan_context_stays_silent_about_vehicle(self):
+        latest = _latest_context(
+            active_car="Nissan X-Trail 2003 SR20VET",
+            last_user_text="Nissan X-Trail 2003 SR20VET \u0442\u0440\u043e\u0438\u0442",
+            last_assistant_text="\u041a\u043e\u0433\u0434\u0430 \u044d\u0442\u043e \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f?",
+            recent_messages=[
+                {"role": "user", "text": "Nissan X-Trail 2003 SR20VET \u0442\u0440\u043e\u0438\u0442"},
+                {"role": "assistant", "text": "\u041a\u043e\u0433\u0434\u0430 \u044d\u0442\u043e \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f?"},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u0447\u0442\u043e \u043d\u043e\u0432\u043e\u0433\u043e?",
+            latest_context=latest,
+            decision=_general_decision(""),
+            natural_reply="\u0412\u0441\u0435 \u0440\u043e\u0432\u043d\u043e. \u0413\u043e\u0442\u043e\u0432 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u0442\u044c, \u043a\u043e\u0433\u0434\u0430 \u0442\u044b \u0437\u0430\u0445\u043e\u0447\u0435\u0448\u044c.",
+        )
+
+        self.assertNotIn("Nissan", response.answer)
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["active_vehicle"], "")
+        self.assertFalse(captured["natural_chat"].call_args.kwargs["context_relevant"])
+
     def test_non_automotive_question_stays_general_even_if_router_is_overeager(self):
         response, captured, kb, history, parser, provider, route = self._run_chat(
             message="\u0447\u0442\u043e \u043d\u043e\u0432\u043e\u0433\u043e?",
@@ -327,6 +383,64 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertIn("после прогрева проходит", captured["update"]["symptom"])
         self.assertEqual(captured["update"]["message_type"], "clarification")
         self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_continue_with_car_may_use_persisted_vehicle_context(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text="\u043a\u0430\u043a \u0436\u0438\u0437\u043d\u044c",
+            last_assistant_text="\u041f\u0440\u0438\u0432\u0435\u0442! \u041a\u0430\u043a \u0434\u0435\u043b\u0430?",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} \u0442\u0440\u043e\u0438\u0442"},
+                {"role": "assistant", "text": "\u041a\u043e\u0433\u0434\u0430 \u044d\u0442\u043e \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f?"},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u0434\u0430\u0432\u0430\u0439 \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u043c \u0441 \u043c\u0430\u0448\u0438\u043d\u043e\u0439",
+            latest_context=latest,
+            decision=_decision(message_type="general", ready_to_search=False),
+        )
+
+        self.assertIn(nissan, response.answer)
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["update"]["active_car"], nissan)
+        self.assertEqual(captured["update"]["message_type"], "clarification")
+        self.assertTrue(captured["natural_chat"].call_args.kwargs["context_relevant"])
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["active_vehicle"], nissan)
+
+    def test_saved_vehicle_question_answers_from_persisted_profile(self):
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u043a\u0430\u043a\u0430\u044f \u0443 \u043c\u0435\u043d\u044f \u043c\u0430\u0448\u0438\u043d\u0430?",
+            latest_context=_latest_context(),
+            user=_user(car_info="Nissan X-Trail 2003 SR20VET"),
+            decision=_decision(message_type="new_diagnostic", ready_to_search=True),
+        )
+
+        self.assertIn("Nissan X-Trail 2003 SR20VET", response.answer)
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "META_CHAT")
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["active_vehicle"], "Nissan X-Trail 2003 SR20VET")
+
+    def test_saved_my_car_persistence_question_gets_accurate_natural_answer(self):
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u0435\u0441\u043b\u0438 \u044f \u0434\u043e\u0431\u0430\u0432\u043b\u044e \u043c\u0430\u0448\u0438\u043d\u0443 \u0432 \u0440\u0430\u0437\u0434\u0435\u043b \u043c\u043e\u0439 \u0430\u0432\u0442\u043e\u043c\u043e\u0431\u0438\u043b\u044c \u0442\u044b \u0431\u0443\u0434\u0435\u0448\u044c \u043f\u043e\u043c\u043d\u0438\u0442\u044c?",
+            latest_context=_latest_context(),
+            decision=_decision(message_type="new_diagnostic", ready_to_search=True),
+            natural_reply="\u0414\u0430. \u0415\u0441\u043b\u0438 \u043c\u0430\u0448\u0438\u043d\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430 \u0432 \u0440\u0430\u0437\u0434\u0435\u043b\u0435 \u00ab\u041c\u043e\u0439 \u0430\u0432\u0442\u043e\u043c\u043e\u0431\u0438\u043b\u044c\u00bb, \u044f \u0441\u043c\u043e\u0433\u0443 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0435\u0435 \u0434\u0430\u043d\u043d\u044b\u0435 \u0432 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0445 \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0430\u0445.",
+        )
+
+        self.assertIn("\u041c\u043e\u0439 \u0430\u0432\u0442\u043e\u043c\u043e\u0431\u0438\u043b\u044c", response.answer)
+        self.assertIn("\u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0445 \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0430\u0445", response.answer)
+        self.assertNotIn("\u043d\u0435 \u0431\u0443\u0434\u0443 \u043f\u043e\u043c\u043d\u0438\u0442\u044c", response.answer.lower())
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        self.assertTrue(captured["natural_chat"].call_args.kwargs["context_relevant"])
 
     def test_after_social_turn_short_automotive_reply_resumes_nissan_without_parser(self):
         nissan = "Nissan X-Trail 2003 SR20VET"
@@ -638,9 +752,39 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertIn("\u041f\u043e\u043c\u043d\u044e", reply)
         self.assertIn("persisted conversation and vehicle context", captured["instructions"])
         self.assertIn("Do not claim that conversation or vehicle history is unavailable", captured["instructions"])
+        self.assertIn("Persisted context is normally silent background", captured["instructions"])
+        self.assertIn("For simple greetings or casual small talk, do not mention vehicles", captured["instructions"])
         payload = captured["input"]
         self.assertIn("Nissan X-Trail 2003 SR20VET", payload)
         self.assertIn("\u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435", payload)
+
+    def test_general_chat_payload_omits_silent_context(self):
+        captured = {}
+
+        async def fake_natural_chat(**kwargs):
+            captured.update(kwargs)
+            return "\u041f\u0440\u0438\u0432\u0435\u0442! \u041a\u0430\u043a \u0434\u0435\u043b\u0430?"
+
+        latest = _latest_context(
+            active_car="Nissan X-Trail 2003 SR20VET",
+            recent_messages=[{"role": "assistant", "text": "\u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043d\u0435 \u043f\u043e\u0442\u0435\u0440\u044f\u043b."}],
+        )
+        with (
+            patch.object(decision_engine, "get_or_create_user", new=AsyncMock(return_value=_user(car_info="Nissan X-Trail 2003 SR20VET"))),
+            patch.object(decision_engine, "route_message", new=AsyncMock(return_value=_general_decision(""))),
+            patch.object(decision_engine, "get_latest_conversation_context", return_value=latest),
+            patch.object(decision_engine, "generate_natural_chat_reply", new=fake_natural_chat),
+            patch.object(decision_engine, "update_user_after_response", new=AsyncMock()),
+            patch.object(decision_engine, "ensure_user_subscription"),
+            patch.object(decision_engine, "resolve_user_vehicle", side_effect=self._vehicle_resolver),
+        ):
+            asyncio.run(decision_engine.process_chat_message({"message": "\u043f\u0440\u0438\u0432\u0435\u0442", "language": "ru"}, source="web"))
+
+        self.assertEqual(captured["recent_conversation"], [])
+        self.assertEqual(captured["active_vehicle"], "")
+        self.assertEqual(captured["automotive_context"], "")
+        self.assertEqual(captured["stored_facts"], [])
+        self.assertFalse(captured["context_relevant"])
 
     def test_routing_failure_before_parser_does_not_decrement_quota(self):
         captured = {}
