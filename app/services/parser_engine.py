@@ -145,8 +145,8 @@ GE: avtoportali.ge
 1. Определи симптом и переведи его на языки релевантных форумов
 2. Найди реальные темы через web_search
 3. Опирайся на найденные темы
-4. Японские форумы — приоритет для Nissan/Toyota/Honda/Subaru/Mitsubishi
-5. Русские форумы — приоритет для Lada, УАЗ и европейских автомобилей с пробегом
+4. Приоритет языка/региона выбирай по рынку, языку запроса и доступности источников, а не по hardcoded марке
+5. Если регион неизвестен, сравни несколько релевантных рынков и явно отделяй факты от гипотез
 6. Если симптом после прогрева — анализируй датчики, ЭБУ, VVT/VCT, термостат и турбину
 7. Если симптом звуковой — определи локацию: двигатель, подвеска, тормоза или трансмиссия
 8. Дай пошаговый план диагностики от простого к сложному
@@ -318,12 +318,11 @@ def _combined_request_text(data: DiagnosticRequest) -> str:
         )
         if str(part or "").strip()
     ).lower()
-    text = re.sub(r"\b1g\s+gze\b", "1g-gze", text)
-    text = re.sub(r"\bgs\s*131\b", "gs131", text)
     return text
 
 
-def _is_legacy_airflow_meter_request(data: DiagnosticRequest) -> bool:
+def _build_search_hints(data: DiagnosticRequest) -> list[str]:
+    hints: list[str] = []
     text = _combined_request_text(data)
     airflow_terms = (
         "расходомер",
@@ -335,50 +334,24 @@ def _is_legacy_airflow_meter_request(data: DiagnosticRequest) -> bool:
         "vane air flow",
         "flap meter",
         "лопат",
-        "adjust",
-        "tune",
-        "set up",
-        "настро",
-        "регулиров",
     )
-    legacy_markers = (
-        "1g-gze",
-        "1ggze",
-        "gs131",
-        "gs-131",
-        "crown",
-        "toyota",
-        "1988",
-        "1989",
-        "1990",
-        "1991",
-    )
-    return any(term in text for term in airflow_terms) and any(marker in text for marker in legacy_markers)
-
-
-def _build_search_hints(data: DiagnosticRequest) -> list[str]:
-    hints: list[str] = []
-    if _is_legacy_airflow_meter_request(data):
+    setup_markers = ("настро", "регулиров", "tune", "adjust", "setup", "set up")
+    if any(term in text for term in airflow_terms) and any(term in text for term in setup_markers):
         hints.extend(
             [
-                "Treat this as an old vane airflow meter request: VAF / AFM / flap meter / lopatka style meter.",
-                "Do not substitute a modern hot-wire MAF unless the source explicitly says so.",
-                "Prefer topics that explicitly mention airflow meter adjustment, AFM spring tension, bypass screw, CO screw, potentiometer track, flap door, or VAF cleaning.",
-                "Reject unrelated 1G-GZE topics about turbo, boost, or knock sensors unless they directly discuss the airflow meter.",
-                "Use search variants such as: Toyota Crown GS131 1G-GZE VAF adjustment, 1G-GZE AFM adjustment, 1G-GZE расходомер настройка, 1G-GZE лопата расходомер, 1G-GZE bypass screw, 1G-GZE AFM spring tension.",
-                "If sources confirm it, name the part as VAF/AFM (лопаточный расходомер).",
+                "Treat this as an airflow-meter adjustment request, not a generic power-loss diagnosis.",
+                "Keep the source-specific sensor type: VAF/AFM/flap meter, hot-wire MAF, MAP, or another type only when the source supports it.",
+                "Prefer sources that explicitly discuss adjustment, cleaning, wiring, bypass screws, spring tension, contact tracks, calibration, or test values for the requested vehicle context.",
+                "Reject unrelated boost, knock, coolant, transmission, or suspension results unless they directly discuss the requested airflow-meter operation.",
             ]
         )
-    text = _combined_request_text(data)
     turbo_markers = ("\u0442\u0443\u0440\u0431\u0438\u043d", "turbo", "boost", "wastegate", "\u0432\u0435\u0441\u0442\u0433\u0435\u0439\u0442")
-    setup_markers = ("\u043d\u0430\u0441\u0442\u0440\u043e", "\u0440\u0435\u0433\u0443\u043b\u0438\u0440\u043e\u0432", "tune", "adjust", "setup", "set up")
     if any(term in text for term in turbo_markers) and any(term in text for term in setup_markers):
         hints.extend(
             [
                 "Treat this as a turbo setup / boost control / wastegate adjustment request, not as a generic warm-engine power-loss diagnosis.",
                 "Reject unrelated topics about coolant temperature sensor, ignition misfire, transmission noise, suspension, or general loss of power unless they explicitly discuss turbo boost control on the requested engine.",
-                "Prefer search variants such as: SR20VET turbo setup, SR20VET boost adjustment, SR20VET wastegate adjustment, SR20VET actuator preload, SR20VET boost controller setup, X-Trail GT SR20VET turbo tuning.",
-                "Return only links and conclusions that explicitly discuss turbo setup, boost adjustment, wastegate, actuator preload, or boost controller behavior.",
+                "Return only links and conclusions that explicitly discuss turbo setup, boost adjustment, wastegate, actuator preload, boost leaks, or boost controller behavior for the supplied vehicle context.",
                 "In the final summary, answer the requested operation directly: what to check first, what is adjusted mechanically/electronically, and what mistakes are dangerous.",
             ]
         )
@@ -402,7 +375,18 @@ def _result_matches_request(result: dict, data: DiagnosticRequest) -> bool:
     if not isinstance(result, dict) or result.get("error"):
         return False
     blob = _result_text_blob(result)
-    if _is_legacy_airflow_meter_request(data):
+    text = _combined_request_text(data)
+    airflow_terms = (
+        "расходомер",
+        "vaf",
+        "afm",
+        "flap",
+        "лопат",
+        "air flow meter",
+        "vane air",
+    )
+    setup_markers = ("настро", "регулиров", "tune", "adjust", "setup", "set up")
+    if any(term in text for term in airflow_terms) and any(term in text for term in setup_markers):
         airflow_terms = (
             "расходомер",
             "vaf",
@@ -423,7 +407,6 @@ def _result_matches_request(result: dict, data: DiagnosticRequest) -> bool:
         has_unrelated_only = any(term in blob for term in unrelated_terms) and not has_airflow
         return has_airflow and not has_unrelated_only
 
-    text = _combined_request_text(data)
     turbo_markers = ("\u0442\u0443\u0440\u0431\u0438\u043d", "turbo", "boost", "wastegate", "\u0432\u0435\u0441\u0442\u0433\u0435\u0439\u0442")
     setup_markers = ("\u043d\u0430\u0441\u0442\u0440\u043e", "\u0440\u0435\u0433\u0443\u043b\u0438\u0440\u043e\u0432", "tune", "adjust", "setup", "set up")
     turbo_setup_request = any(term in text for term in turbo_markers) and any(term in text for term in setup_markers)
@@ -455,119 +438,6 @@ def _result_matches_request(result: dict, data: DiagnosticRequest) -> bool:
     return True
 
 
-def _legacy_1g_gze_airflow_result(data: DiagnosticRequest) -> dict | None:
-    text = _combined_request_text(data)
-    has_engine = "1g-gze" in text or "1ggze" in text
-    has_body = "gs131" in text or "gs-131" in text
-    has_model = "crown" in text
-    if not (has_engine and has_body and has_model):
-        return None
-    if not any(term in text for term in ("расходомер", "vaf", "afm", "лопат", "maf", "adjust", "tune", "настро", "регулиров")):
-        return None
-
-    topics = [
-        {
-            "title": "Настройка MAF на 1G-GZE",
-            "forum": "drive2.ru",
-            "url": "https://www.drive2.ru/l/288230376152848319/",
-            "lang": "ru",
-            "relevance": "high",
-            "key_info": "Обсуждают лопаточный VAF/AFM на 1G-GZE, его настройку и поведение после вмешательства.",
-        },
-        {
-            "title": "Плавающие обороты на 1G-GZE",
-            "forum": "drive2.ru",
-            "url": "https://www.drive2.ru/l/479927755627037007/",
-            "lang": "ru",
-            "relevance": "high",
-            "key_info": "Есть практические замечания по расходомеру, холостому ходу и связи с настройкой смеси.",
-        },
-        {
-            "title": "Как регулировать CO на 1G-GZE на расходомере",
-            "forum": "drive2.ru",
-            "url": "https://www.drive2.ru/l/521263620395369494/",
-            "lang": "ru",
-            "relevance": "high",
-            "key_info": "Разбор регулировки смеси через расходомер и базовых механических настроек.",
-        },
-        {
-            "title": "Настройка MAP",
-            "forum": "drive2.ru",
-            "url": "https://www.drive2.ru/l/7715570/",
-            "lang": "ru",
-            "relevance": "medium",
-            "key_info": "Сопутствующая тема по настройке смесеобразования и отклику двигателя.",
-        },
-        {
-            "title": "Настроил MAF. Немного о расходе на GZE",
-            "forum": "drive2.ru",
-            "url": "https://www.drive2.ru/l/469868598622421757/",
-            "lang": "ru",
-            "relevance": "medium",
-            "key_info": "Практика владельца по поведению расходомера и расходу топлива после регулировки.",
-        },
-        {
-            "title": "Про двигатель 1G-GZE",
-            "forum": "drive2.ru",
-            "url": "https://www.drive2.ru/l/288230376151847421/",
-            "lang": "ru",
-            "relevance": "medium",
-            "key_info": "Общая информация по особенностям 1G-GZE, полезна для контекста по смеси и впуску.",
-        },
-    ]
-    links = [
-        {
-            "title": topic["title"],
-            "url": topic["url"],
-            "description": topic["key_info"],
-            "type": "link",
-        }
-        for topic in topics
-    ]
-    result = {
-        "summary": "На Toyota Crown GS131 с 1G-GZE расходомер — это лопаточный VAF/AFM, который требует механической настройки, а не обычный современный MAF.",
-        "common_causes": [
-            {"cause": "Растянувшаяся пружина лопаты расходомера, из-за чего показания уплывают.", "frequency": "high", "source_langs": ["ru"]},
-            {"cause": "Неправильно выставлен регулировочный винт или байпасный канал расходомера.", "frequency": "high", "source_langs": ["ru"]},
-            {"cause": "Загрязнение внутри корпуса расходомера и на дорожке/контактах.", "frequency": "medium", "source_langs": ["ru"]},
-            {"cause": "Подсос воздуха после расходомера, который искажает смесь.", "frequency": "medium", "source_langs": ["ru"]},
-            {"cause": "Износ контактной дорожки или ползунка внутри AFM/VAF.", "frequency": "medium", "source_langs": ["ru"]},
-        ],
-        "solutions": [
-            {"title": "Сначала снять и осмотреть расходомер", "description": "Проверьте лопату, чистоту корпуса, состояние дорожки и контактов. На этом моторе это VAF/AFM, а не hot-wire MAF.", "priority": "high", "cost": "free", "source_langs": ["ru"]},
-            {"title": "Проверить базовую регулировку винта и байпасного канала", "description": "Перед вмешательством отметьте исходное положение. Затем сверяйте регулировку по профильным темам именно для 1G-GZE, а не по универсальным MAF-инструкциям.", "priority": "high", "cost": "free", "source_langs": ["ru"]},
-            {"title": "Проверить натяжение пружины и плавность хода лопаты", "description": "Если пружина уставшая или лопата ходит неравномерно, смесь и холостой ход начинают плавать.", "priority": "high", "cost": "moderate", "source_langs": ["ru"]},
-            {"title": "Исключить подсос воздуха после расходомера", "description": "Проверьте патрубки, хомуты и соединения после AFM/VAF, иначе регулировка самого расходомера не даст нормального результата.", "priority": "high", "cost": "cheap", "source_langs": ["ru"]},
-        ],
-        "unlikely_causes": [
-            "Полная неисправность ЭБУ без других симптомов",
-            "Случайная проблема только турбонаддува без связи со смесью",
-        ],
-        "regional_insights": {
-            "ru": "На русскоязычных темах по 1G-GZE расходомер описывают как лопаточный VAF/AFM, и обсуждают именно пружину, винт, дорожку и подсос воздуха после него.",
-            "en": "",
-            "jp": "",
-            "cn": "",
-            "eu": "",
-        },
-        "links": links,
-        "topics_found": topics,
-        "total_topics": len(topics),
-        "confidence": "high",
-        "recommendation": "Начинайте с очистки и проверки лопаточного расходомера, затем проверьте винт/байпас, натяжение пружины и отсутствие подсоса воздуха после него.",
-        "need_more_info": False,
-        "clarifying_question": "",
-    }
-    result["_meta"] = {
-        "engine": "legacy 1G-GZE airflow knowledge",
-        "mode": data.mode.lower().strip(),
-        "allowed_domains": build_allowed_domains(data),
-        "fallback_used": False,
-        "version": "7.5",
-    }
-    return result
-
-
 async def diagnose(data: DiagnosticRequest) -> dict:
     mode = data.mode.lower().strip()
     allowed_domains = build_allowed_domains(data)
@@ -585,10 +455,6 @@ async def diagnose(data: DiagnosticRequest) -> dict:
         except Exception as exc:
             logger.exception("Remote parser call failed for %s: %s", remote_url, exc)
             pass
-
-    legacy_result = _legacy_1g_gze_airflow_result(data)
-    if legacy_result and mode != "deep":
-        return legacy_result
 
     context_parts = []
     if data.car_info:

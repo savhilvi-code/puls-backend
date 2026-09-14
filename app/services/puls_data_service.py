@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlparse, urlunparse
 from typing import Any
 
 from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError, get_supabase_client, is_supabase_configured
@@ -22,6 +23,24 @@ def _now_iso() -> str:
 
 def _rows(response) -> list[dict]:
     return getattr(response, "data", []) or []
+
+
+def _canonical_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    scheme = parsed.scheme.lower() or "https"
+    netloc = parsed.netloc.lower()
+    path = parsed.path.rstrip("/")
+    if "youtu.be" in netloc:
+        video_id = path.strip("/").split("/", 1)[0]
+        return f"https://www.youtube.com/watch?v={video_id}" if video_id else raw
+    if "youtube.com" in netloc:
+        video_id = parse_qs(parsed.query).get("v", [""])[0]
+        if video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+    return urlunparse((scheme, netloc, path, "", "", ""))
 
 
 def _safe_execute(operation, default=None):
@@ -310,11 +329,12 @@ def save_video_library(*, user_id: int | None, vehicle_id: int | None, diagnosti
             url = str(item.get("url") or "").strip()
             if not url:
                 continue
+            canonical = _canonical_url(url)
             exists = (
                 client.table("video_library")
                 .select("id")
                 .eq("user_id", user_id)
-                .eq("url", url)
+                .eq("url", canonical or url)
                 .limit(1)
                 .execute()
             )
@@ -326,14 +346,92 @@ def save_video_library(*, user_id: int | None, vehicle_id: int | None, diagnosti
                     "vehicle_id": vehicle_id,
                     "diagnostic_request_id": diagnostic_request_id,
                     "title": item.get("title") or "Video",
-                    "url": url,
-                    "platform": "youtube" if "youtu" in url.lower() else "browser",
+                    "url": canonical or url,
+                    "platform": "youtube" if "youtu" in (canonical or url).lower() else "browser",
                     "topic": topic,
                 }
             ).execute()
         return None
 
     _safe_execute(operation)
+
+
+def find_reusable_media(
+    *,
+    user_id: int | None,
+    vehicle_id: int | None,
+    subject: str,
+    intent: str,
+    limit: int = 5,
+) -> list[dict]:
+    if user_id is None:
+        return []
+
+    subject_text = " ".join(str(subject or "").lower().split())
+    wants_video = intent == "VIDEO_REFERENCE"
+    wants_image = intent == "IMAGE_REFERENCE"
+
+    def score(text: str) -> int:
+        haystack = " ".join(str(text or "").lower().split())
+        if not subject_text:
+            return 1
+        value = 0
+        if subject_text and subject_text in haystack:
+            value += 5
+        for token in subject_text.split():
+            if len(token) > 3 and token in haystack:
+                value += 1
+        return value
+
+    def operation():
+        client = get_supabase_client()
+        candidates: list[dict] = []
+
+        video_query = client.table("video_library").select("title,url,platform,topic,vehicle_id,created_at").eq("user_id", user_id)
+        if vehicle_id is not None:
+            video_query = video_query.eq("vehicle_id", vehicle_id)
+        for row in _rows(video_query.order("created_at", desc=True).limit(30).execute()):
+            link = {
+                "title": str(row.get("title") or "Video").strip(),
+                "url": str(row.get("url") or "").strip(),
+                "description": str(row.get("topic") or "").strip(),
+                "type": "video",
+            }
+            if link["url"] and (wants_video or not wants_image):
+                candidates.append({**link, "_score": score(f"{link['title']} {link['description']}")})
+
+        media_query = client.table("media_files").select("media_type,file_url,thumbnail_url,description,vehicle_id,created_at").eq("user_id", user_id)
+        if vehicle_id is not None:
+            media_query = media_query.eq("vehicle_id", vehicle_id)
+        for row in _rows(media_query.order("created_at", desc=True).limit(50).execute()):
+            media_type = str(row.get("media_type") or "link").lower()
+            if wants_video and media_type != "video":
+                continue
+            if wants_image and media_type not in {"image", "photo"}:
+                continue
+            url = str(row.get("file_url") or "").strip()
+            if not url:
+                continue
+            link = {
+                "title": str(row.get("description") or url).strip(),
+                "url": url,
+                "description": str(row.get("description") or "").strip(),
+                "type": "image" if media_type in {"image", "photo"} else "video" if media_type == "video" else "link",
+            }
+            candidates.append({**link, "_score": score(f"{link['title']} {link['description']} {url}")})
+
+        deduped: dict[str, dict] = {}
+        for item in candidates:
+            canonical = _canonical_url(item.get("url", ""))
+            if not canonical:
+                continue
+            previous = deduped.get(canonical)
+            if previous is None or int(item.get("_score") or 0) > int(previous.get("_score") or 0):
+                deduped[canonical] = {**item, "url": canonical}
+        ordered = sorted(deduped.values(), key=lambda item: int(item.get("_score") or 0), reverse=True)
+        return [{key: value for key, value in item.items() if key != "_score"} for item in ordered if int(item.get("_score") or 0) > 0][:limit]
+
+    return _safe_execute(operation, [])
 
 
 def save_feedback(*, user_id: int | None, vehicle_id: int | None, conversation_id: int | None, diagnostic_request_id: int | None, feedback_type: str, feedback_text: str) -> dict | None:
