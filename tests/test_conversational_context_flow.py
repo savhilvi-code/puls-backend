@@ -141,6 +141,89 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(captured["update"]["message_type"], "general")
         self.assertEqual(captured["update"]["active_car"], nissan)
         self.assertEqual(captured["update"]["vehicle_id"], 20)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_active_case_meta_context_question_skips_automotive_pipeline(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text="привет",
+            last_assistant_text="Нормально, я на связи. По машине контекст не потерял.",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} троит на холодную"},
+                {"role": "assistant", "text": "Когда проявляется?"},
+                {"role": "user", "text": "привет"},
+                {"role": "assistant", "text": "Нормально, я на связи. По машине контекст не потерял."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="ты про какой контекст",
+            latest_context=latest,
+            decision=_decision(message_type="new_diagnostic", ready_to_search=True),
+        )
+
+        self.assertIn("контекст машины", response.answer.lower())
+        self.assertIn(nissan, response.answer)
+        self.assertNotIn("не помогло", response.answer.lower())
+        self.assertNotIn("короткий диагноз", response.answer.lower())
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertEqual(captured["update"]["active_car"], nissan)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_meta_what_do_you_mean_answers_prior_statement_without_pipeline(self):
+        latest = _latest_context(
+            active_car="Nissan X-Trail 2003 SR20VET",
+            last_user_text="привет",
+            last_assistant_text="Нормально, я на связи. По машине контекст не потерял.",
+            recent_messages=[
+                {"role": "user", "text": "привет"},
+                {"role": "assistant", "text": "Нормально, я на связи. По машине контекст не потерял."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="что ты имеешь в виду?",
+            latest_context=latest,
+            decision=_decision(message_type="new_diagnostic", ready_to_search=True),
+        )
+
+        self.assertIn("история этого разговора", response.answer.lower())
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+
+    def test_after_meta_turn_automotive_reply_resumes_context(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text="ты про какой контекст",
+            last_assistant_text=f"Я про контекст машины, которую мы обсуждали: {nissan}.",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} троит на холодную"},
+                {"role": "assistant", "text": "Когда проявляется?"},
+                {"role": "user", "text": "ты про какой контекст"},
+                {"role": "assistant", "text": f"Я про контекст машины, которую мы обсуждали: {nissan}."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="ладно, по машине - после прогрева проходит",
+            latest_context=latest,
+        )
+
+        self.assertFalse(kb.called)
+        self.assertFalse(parser.called)
+        self.assertEqual(captured["update"]["active_car"], nissan)
+        self.assertIn("после прогрева проходит", captured["update"]["symptom"])
+        self.assertEqual(captured["update"]["message_type"], "clarification")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_after_social_turn_short_automotive_reply_resumes_nissan_without_parser(self):
         nissan = "Nissan X-Trail 2003 SR20VET"
@@ -184,6 +267,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertFalse(provider.called)
         self.assertEqual(captured["update"]["active_car"], "")
         self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_initial_vibration_asks_clarification_without_parser(self):
         response, captured, kb, history, parser, provider, route = self._run_chat(
@@ -195,6 +279,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertFalse(kb.called)
         self.assertFalse(parser.called)
         self.assertEqual(captured["update"]["message_type"], "clarification")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_short_acceleration_detail_keeps_case_without_parser(self):
         latest = _latest_context(
@@ -216,6 +301,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(captured["update"]["message_type"], "clarification")
         self.assertIn("машина вибрирует", captured["update"]["symptom"])
         self.assertIn("только при разгоне", captured["update"]["symptom"])
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_sufficient_context_with_internal_kb_hit_stops_before_parser(self):
         toyota = "Toyota Corolla 2010 1ZZ"
@@ -242,6 +328,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertFalse(parser.called)
         self.assertEqual(captured["update"]["message_type"], "kb_match")
         self.assertIn("Internal PULS answer", response.answer)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_sufficient_context_with_internal_kb_miss_runs_parser_once(self):
         toyota = "Toyota Corolla 2010 1ZZ"
@@ -268,6 +355,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(parser.call_count, 1)
         self.assertEqual(captured["update"]["message_type"], "parser")
         self.assertIn("Stored diagnostic answer", response.answer)
+        self.assertTrue(captured["update"]["should_decrease_limit"])
 
     def test_parser_evidence_does_not_become_user_fact(self):
         parser_case = _parser_case(
@@ -285,6 +373,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertTrue(parser.called)
         self.assertNotIn("hot", captured["update"]["symptom"].lower())
         self.assertIn("hot", captured["update"]["parsed_case"]["parser_summary"].lower())
+        self.assertTrue(captured["update"]["should_decrease_limit"])
 
     def test_old_nissan_history_does_not_override_current_toyota(self):
         old_history = (
@@ -311,6 +400,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(captured["update"]["active_car"], toyota)
         self.assertEqual(captured["update"]["vehicle_id"], 10)
         self.assertFalse(parser.called)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_explicit_vehicle_switch_becomes_active_vehicle(self):
         latest = _latest_context(active_car="Toyota Corolla 2010 1ZZ", last_user_text="Toyota vibration")
@@ -325,6 +415,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertEqual(captured["update"]["vehicle_id"], 20)
         self.assertTrue(parser.called)
         self.assertEqual(parser.call_args.args[0]["active_car"], "Nissan X-Trail 2003 SR20VET")
+        self.assertTrue(captured["update"]["should_decrease_limit"])
 
     def test_source_followup_uses_stored_evidence_without_parser(self):
         history_text = (
@@ -345,6 +436,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertFalse(parser.called)
         self.assertEqual([item.url for item in response.links], ["https://example.com/stored"])
         self.assertEqual(captured["update"]["message_type"], "general")
+        self.assertFalse(captured["update"]["should_decrease_limit"])
 
     def test_negative_feedback_preserves_case_and_runs_deeper_search(self):
         toyota = "Toyota Corolla 2010 1ZZ"
@@ -380,6 +472,7 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertIn("after axle replacement", parser.call_args.args[0]["symptom"])
         self.assertIn("Previous answer", parser.call_args.args[0]["conversation_history"])
         self.assertEqual(captured["update"]["message_type"], "parser")
+        self.assertTrue(captured["update"]["should_decrease_limit"])
 
     def test_large_parser_evidence_stays_concise_but_is_preserved(self):
         cases = [{"cause": f"cause {index}", "solution": f"check {index}"} for index in range(8)]
@@ -395,6 +488,45 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertTrue(parser.called)
         self.assertLess(len(response.answer), 1200)
         self.assertEqual(len(captured["update"]["parsed_case"]["extracted_cases"]), 8)
+        self.assertTrue(captured["update"]["should_decrease_limit"])
+
+    def test_parser_episode_with_large_internal_work_still_decrements_once(self):
+        parser_case = _parser_case(
+            summary="Parser combined several searches",
+            links=[{"title": f"Source {index}", "url": f"https://example.com/{index}", "description": "", "type": "link"} for index in range(6)],
+            extracted_cases=[{"cause": f"cause {index}", "solution": f"check {index}"} for index in range(6)],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="Toyota Corolla 2010 1ZZ вибрирует при разгоне после замены привода P0000",
+            latest_context=_latest_context(),
+            kb_match=None,
+            parser_case=parser_case,
+        )
+
+        self.assertEqual(parser.call_count, 1)
+        self.assertTrue(captured["update"]["should_decrease_limit"])
+
+    def test_routing_failure_before_parser_does_not_decrement_quota(self):
+        captured = {}
+
+        async def fake_update(*args, **kwargs):
+            captured["update"] = kwargs
+
+        async def failing_route(normalized, user):
+            raise RuntimeError("router failed before parser")
+
+        with (
+            patch.object(decision_engine, "get_or_create_user", new=AsyncMock(return_value=_user())),
+            patch.object(decision_engine, "get_latest_conversation_context", return_value=_latest_context()),
+            patch.object(decision_engine, "route_message", new=failing_route),
+            patch.object(decision_engine, "parse_diagnostic", new=AsyncMock()),
+            patch.object(decision_engine, "update_user_after_response", new=fake_update),
+        ):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(decision_engine.process_chat_message({"message": "Toyota vibrates", "language": "en"}, source="web"))
+
+        self.assertEqual(captured, {})
 
 
 if __name__ == "__main__":
