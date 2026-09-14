@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.schemas.router import RouterDecision
-from app.services import decision_engine
+from app.services import decision_engine, openai_service
 
 
 def _user(history: str = "", car_info: str = ""):
@@ -240,6 +240,38 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
         self.assertFalse(provider.called)
         self.assertEqual(captured["update"]["message_type"], "general")
         self.assertEqual(captured["update"]["active_car"], nissan)
+        self.assertFalse(captured["update"]["should_decrease_limit"])
+        captured["natural_chat"].assert_called_once()
+        self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "META_CHAT")
+
+    def test_meta_reaction_to_memory_context_stays_lightweight_even_if_router_requests_deep_search(self):
+        nissan = "Nissan X-Trail 2003 SR20VET"
+        latest = _latest_context(
+            active_car=nissan,
+            last_user_text="\u043a\u0430\u043a \u0436\u0438\u0437\u043d\u044c",
+            last_assistant_text="\u0412\u0441\u0435 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e. \u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043d\u0435 \u043f\u043e\u0442\u0435\u0440\u044f\u043b.",
+            recent_messages=[
+                {"role": "user", "text": f"{nissan} \u0442\u0440\u043e\u0438\u0442 \u043d\u0430 \u0445\u043e\u043b\u043e\u0434\u043d\u0443\u044e"},
+                {"role": "assistant", "text": "\u041a\u043e\u0433\u0434\u0430 \u043f\u0440\u043e\u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f?"},
+                {"role": "user", "text": "\u043a\u0430\u043a \u0436\u0438\u0437\u043d\u044c"},
+                {"role": "assistant", "text": "\u0412\u0441\u0435 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e. \u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043d\u0435 \u043f\u043e\u0442\u0435\u0440\u044f\u043b."},
+            ],
+        )
+
+        response, captured, kb, history, parser, provider, route = self._run_chat(
+            message="\u0434\u0430 \u0442\u043e\u0436\u0435 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e \u0447\u0442\u043e \u0442\u044b \u043f\u043e\u043c\u043d\u0438\u0448\u044c \u043f\u0440\u043e \u043d\u0430\u0448\u0443 \u043f\u0435\u0440\u0435\u043f\u0438\u0441\u043a\u0443",
+            latest_context=latest,
+            decision=_decision(message_type="followup_deep", ready_to_search=True, deep_search=True, user_says_not_helped=True),
+        )
+
+        self.assertTrue(response.answer.strip())
+        self.assertNotIn("\u041a\u043e\u0440\u043e\u0442\u043a\u0438\u0439 \u0434\u0438\u0430\u0433\u043d\u043e\u0437", response.answer)
+        self.assertNotIn("\u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e", response.answer.lower())
+        self.assertFalse(kb.called)
+        self.assertFalse(history.called)
+        self.assertFalse(parser.called)
+        self.assertFalse(provider.called)
+        self.assertEqual(captured["update"]["message_type"], "general")
         self.assertFalse(captured["update"]["should_decrease_limit"])
         captured["natural_chat"].assert_called_once()
         self.assertEqual(captured["natural_chat"].call_args.kwargs["mode"], "META_CHAT")
@@ -577,6 +609,38 @@ class FastChatCoreAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(parser.call_count, 1)
         self.assertTrue(captured["update"]["should_decrease_limit"])
+
+    def test_natural_chat_receives_persisted_context_capability_instruction(self):
+        captured = {}
+
+        class FakeResponses:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return SimpleNamespace(output_text='{"reply":"\u041f\u043e\u043c\u043d\u044e \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u043e, \u0447\u0442\u043e \u0435\u0441\u0442\u044c \u0432 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u0435."}')
+
+        client = SimpleNamespace(responses=FakeResponses())
+        recent = [{"role": "assistant", "text": "\u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043d\u0435 \u043f\u043e\u0442\u0435\u0440\u044f\u043b."}]
+
+        with (
+            patch.object(openai_service, "is_configured", return_value=True),
+            patch.object(openai_service, "get_openai_client", return_value=client),
+        ):
+            reply = asyncio.run(
+                openai_service.generate_natural_chat_reply(
+                    mode="META_CHAT",
+                    user_text="\u0447\u0442\u043e \u0442\u044b \u043f\u043e\u043c\u043d\u0438\u0448\u044c",
+                    language="ru",
+                    recent_conversation=recent,
+                    active_vehicle="Nissan X-Trail 2003 SR20VET",
+                )
+            )
+
+        self.assertIn("\u041f\u043e\u043c\u043d\u044e", reply)
+        self.assertIn("persisted conversation and vehicle context", captured["instructions"])
+        self.assertIn("Do not claim that conversation or vehicle history is unavailable", captured["instructions"])
+        payload = captured["input"]
+        self.assertIn("Nissan X-Trail 2003 SR20VET", payload)
+        self.assertIn("\u041f\u043e \u043c\u0430\u0448\u0438\u043d\u0435", payload)
 
     def test_routing_failure_before_parser_does_not_decrement_quota(self):
         captured = {}

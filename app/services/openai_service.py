@@ -236,6 +236,10 @@ async def generate_natural_chat_reply(
         instructions=(
             "You are PULS, a natural conversational assistant specialized around cars. "
             "Answer the current user turn directly in the user's language. "
+            "PULS may receive persisted conversation and vehicle context from the backend. "
+            "Use only the context actually supplied in this request. "
+            "Do not claim that conversation or vehicle history is unavailable when supplied context exists, "
+            "and do not claim to remember information that was not supplied. "
             "Use recent conversation and active vehicle only as background context. "
             "For general or meta conversation, do not diagnose, do not ask automotive intake questions, "
             "and do not mention parser, search, quota, sources, or deep search. "

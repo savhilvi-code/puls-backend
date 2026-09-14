@@ -235,9 +235,34 @@ def _looks_like_detail_request(text: str) -> bool:
 def _looks_like_meta_followup(text: str, previous_assistant: str) -> bool:
     lowered = _normalize_phrase(text)
     previous = _normalize_phrase(previous_assistant)
-    if not lowered or not previous:
+    if not lowered:
         return False
     if _has_automotive_content(lowered) or _extract_active_car_from_text(lowered):
+        return False
+
+    memory_or_context_reference = _contains_any(
+        lowered,
+        (
+            "remember",
+            "memory",
+            "context",
+            "previous chat",
+            "conversation",
+            "what you said",
+            "what you meant",
+            "\u043f\u043e\u043c\u043d",
+            "\u0437\u0430\u043f\u043e\u043c\u043d",
+            "\u043f\u0435\u0440\u0435\u043f\u0438\u0441",
+            "\u0438\u0441\u0442\u043e\u0440\u0438",
+            "\u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442",
+            "\u0447\u0442\u043e \u0442\u044b \u0441\u043a\u0430\u0437\u0430\u043b",
+            "\u0447\u0442\u043e \u0442\u044b \u0438\u043c\u0435\u043b",
+        ),
+    )
+    if memory_or_context_reference and previous:
+        return True
+
+    if not previous:
         return False
 
     asks_about_statement = lowered.endswith("?") or _contains_any(
@@ -662,12 +687,12 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
     fallback_car = str(getattr(user, "car_info", "") or "").strip()
 
     mode = "GENERAL_CHAT"
-    if _looks_like_feedback_helped(text, decision):
+    if _looks_like_meta_followup(text, str(latest_context.get("last_assistant_text") or "")):
+        mode = "META_CHAT"
+    elif _looks_like_feedback_helped(text, decision):
         mode = "FEEDBACK"
     elif _looks_like_feedback_not_helped(text, decision):
         mode = "FEEDBACK"
-    elif _looks_like_meta_followup(text, str(latest_context.get("last_assistant_text") or "")):
-        mode = "META_CHAT"
     elif _looks_like_source_question(text) or _looks_like_detail_request(text):
         mode = "KNOWLEDGE_REQUEST"
     elif decision.message_type == "general" and not _has_automotive_content(text):
@@ -753,7 +778,7 @@ async def _persist_and_return(
         message_type=message_type,
         links=links or [],
         parser_used=parser_used,
-        deep_search_used=bool(context.should_deep_search),
+        deep_search_used=bool(parser_used and context.should_deep_search),
         vehicle_id=context.vehicle_id,
         parsed_case=parsed_case,
         force_new_conversation=context.mode == "VEHICLE_SWITCH",
