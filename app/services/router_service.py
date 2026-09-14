@@ -6,310 +6,129 @@ from app.utils.language import normalize_language_code
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "router_prompt.txt"
 
-_CAR_HINTS = ("nissan", "toyota", "honda", "bmw", "audi", "volkswagen", "vw", "ford", "mazda", "xtrail", "x-trail", "sr20vet", "sr20", "pnt30")
-_PROBLEM_HINTS = (
-    "плохо",
-    "не работает",
-    "не заводится",
-    "не едет",
-    "заводится",
-    "теряет тягу",
-    "потеря тяги",
-    "нет тяги",
-    "не тянет",
-    "тупит",
-    "дергается",
-    "провал",
-    "мощност",
-    "разгон",
-    "на холодную",
-    "на горячую",
-    "на прогретую",
-    "cold",
-    "stall",
-    "stalls",
-    "loss of power",
-    "turbo",
-)
-_FEEDBACK_HELPED = ("helped", "fixed", "solved", "works", "помогло", "исправлено", "решено", "работает")
-_FEEDBACK_DEEP = ("не помогло", "ищи глубже", "нужно больше информации", "more details", "not helped", "still")
-_GREETINGS = ("hi", "hello", "hey", "привет", "здравствуй", "здравствуйте", "добрый день", "доброе утро", "добрый вечер")
-_SOCIAL_CUES = (
-    "how are you",
-    "how's it going",
-    "thanks",
-    "thank you",
-    "cool",
-    "okay",
-    "ok",
-    "как дела",
-    "как ты",
-    "спасибо",
-    "понятно",
-    "ясно",
-    "круто",
-    "ладно",
-    "ок",
-    "окей",
-)
+
+def _normalize(text: str) -> str:
+    return " ".join(str(text or "").strip().lower().strip(" \t\n\r,.:;!?").split())
 
 
-def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
-    lowered = str(text or "").lower()
-    return any(token in lowered for token in tokens)
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = _normalize(text)
+    return any(term in lowered for term in terms)
 
 
-def _has_car_hint(text: str) -> bool:
-    return _contains_any(text, _CAR_HINTS)
-
-
-def _has_problem_hint(text: str) -> bool:
-    return _contains_any(text, _PROBLEM_HINTS)
-
-
-def _has_feedback_helped(text: str) -> bool:
-    return _contains_any(text, _FEEDBACK_HELPED)
-
-
-def _has_feedback_deep(text: str) -> bool:
-    return _contains_any(text, _FEEDBACK_DEEP)
-
-
-def _has_diagnostic_intent(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(
-        token in lowered
-        for token in (
-            "как заменить",
-            "как поменять",
-            "как снять",
-            "как починить",
-            "почему",
-            "не работает",
-            "не заводится",
-            "теряет тягу",
-            "нет тяги",
-            "тупит",
-            "дергается",
-            "стучит",
-            "свистит",
-            "дымит",
-            "горит",
-            "шум",
-            "ошибк",
-            "диагност",
-            "ремонт",
-            "проверить",
-            "устранить",
-            "заменить",
-            "поменять",
-            "починить",
-            "turbo",
-            "stall",
-            "stalls",
-            "loss of power",
-            "how to",
-            "replace",
-            "adjust",
-            "tune",
-            "fix",
-            "repair",
-            "change",
-            "remove",
-            "install",
-            "service",
-            "set up",
-            "will not move",
-            "won't move",
-            "does not move",
-            "doesn't move",
-            "not move",
-            "no movement",
-            "won't start",
-            "doesn't start",
-            "no power",
-            "loses power",
-            "won't go",
-        )
+def _has_car_reference(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "toyota",
+            "nissan",
+            "honda",
+            "mazda",
+            "bmw",
+            "audi",
+            "volkswagen",
+            "vw",
+            "lexus",
+            "x-trail",
+            "xtrail",
+            "corolla",
+        ),
     )
 
 
-def _is_greeting(text: str) -> bool:
-    lowered = str(text or "").strip().lower()
-    if lowered in _GREETINGS:
-        return True
-    for token in _GREETINGS:
-        if not lowered.startswith(token + " "):
-            continue
-        rest = lowered[len(token):].strip(" \t\n\r,.:;!?")
-        if not rest:
-            return True
-        if _has_diagnostic_intent(rest):
-            return False
-        if len(rest) <= 18:
-            return True
-    return False
+def _has_automotive_content(text: str) -> bool:
+    return _contains_any(
+        text,
+        (
+            "engine",
+            "rpm",
+            "idle",
+            "dtc",
+            "obd",
+            "vibrat",
+            "stall",
+            "misfire",
+            "acceleration",
+            "under load",
+            "oil",
+            "fluid",
+            "repair",
+            "replace",
+            "\u043c\u0430\u0448\u0438\u043d",
+            "\u0434\u0432\u0438\u0433\u0430\u0442",
+            "\u0432\u0438\u0431\u0440\u0430\u0446",
+            "\u0442\u0440\u043e\u0438\u0442",
+            "\u043d\u0435 \u0442\u044f\u043d\u0435\u0442",
+            "\u0440\u0430\u0437\u0433\u043e\u043d",
+            "\u0445\u043e\u043b\u043e\u0434",
+            "\u0433\u043e\u0440\u044f\u0447",
+            "\u043f\u0440\u043e\u0433\u0440\u0435\u0432",
+            "\u0437\u0430\u043c\u0435\u043d",
+            "\u043e\u0448\u0438\u0431",
+            "\u043c\u0430\u0441\u043b\u043e",
+        ),
+    )
 
 
 def _is_social_general_text(text: str) -> bool:
-    lowered = " ".join(str(text or "").strip().lower().strip(" \t\n\r,.:;!?").split())
-    if not lowered:
+    lowered = _normalize(text)
+    if not lowered or _has_car_reference(lowered) or _has_automotive_content(lowered):
         return False
-    if _is_greeting(lowered):
-        return True
-    if _has_car_hint(lowered) or _has_problem_hint(lowered) or _has_diagnostic_intent(lowered):
-        return False
-    if _has_feedback_helped(lowered) or _has_feedback_deep(lowered):
-        return False
-    return len(lowered.split()) <= 5 and any(cue in lowered for cue in _SOCIAL_CUES)
-
-
-def _local_router(text: str, language: str) -> RouterDecision:
-    lowered = text.lower().strip()
-    language = normalize_language_code(language)
-
-    negative = {"not helped", "did not help", "still", "deeper", "more details"}
-    positive = {"helped", "fixed", "solved", "works", "thanks"}
-    greetings = {"hi", "hello", "hey", "привет", "здравствуйте", "здравствуй"}
-
-    if _is_greeting(lowered):
-        return RouterDecision(
-            message_type="general",
-            language=language,
-            need_car_info=False,
-            need_clarification=False,
-            ready_to_search=False,
-            deep_search=False,
-            user_says_helped=False,
-            user_says_not_helped=False,
-            question="",
-            car_info="",
-            active_car="",
-            symptom="",
-            response="",
-        )
-
-    if _is_social_general_text(lowered):
-        return RouterDecision(
-            message_type="general",
-            language=language,
-            need_car_info=False,
-            need_clarification=False,
-            ready_to_search=False,
-            deep_search=False,
-            user_says_helped=False,
-            user_says_not_helped=False,
-            question="",
-            car_info="",
-            active_car="",
-            symptom="",
-            response="",
-        )
-
-    if any(token in lowered for token in negative):
-        return RouterDecision(
-            message_type="followup_deep",
-            language=language,
-            need_car_info=False,
-            need_clarification=False,
-            ready_to_search=True,
-            deep_search=True,
-            user_says_helped=False,
-            user_says_not_helped=True,
-            question="",
-            car_info="",
-            active_car="",
-            symptom=text[:120],
-            response="",
-        )
-
-    if any(token in lowered for token in positive):
-        return RouterDecision(
-            message_type="helped_feedback",
-            language=language,
-            need_car_info=False,
-            need_clarification=False,
-            ready_to_search=False,
-            deep_search=False,
-            user_says_helped=True,
-            user_says_not_helped=False,
-            question="",
-            car_info="",
-            active_car="",
-            symptom="",
-            response="",
-        )
-
-    need_car_info = not bool(text)
-    return RouterDecision(
-        message_type="new_diagnostic",
-        language=language,
-        need_car_info=need_car_info,
-        need_clarification=False,
-        ready_to_search=True,
-        deep_search=False,
-        user_says_helped=False,
-        user_says_not_helped=False,
-        question="",
-        car_info="",
-        active_car="",
-        symptom=text[:120],
-        response="",
+    return _contains_any(
+        lowered,
+        (
+            "hi",
+            "hello",
+            "hey",
+            "how are you",
+            "thanks",
+            "thank you",
+            "ok",
+            "okay",
+            "\u043f\u0440\u0438\u0432\u0435\u0442",
+            "\u0434\u043e\u0431\u0440\u044b\u0439 \u0434\u0435\u043d\u044c",
+            "\u043a\u0430\u043a \u0434\u0435\u043b\u0430",
+            "\u043a\u0430\u043a \u0442\u044b",
+            "\u043a\u0430\u043a \u0436\u0438\u0437\u043d\u044c",
+            "\u0441\u043f\u0430\u0441\u0438\u0431\u043e",
+            "\u043f\u043e\u043d\u044f\u0442\u043d\u043e",
+        ),
     )
 
 
-async def route_message(normalized, user) -> RouterDecision:
-    prompt = ""
-    if PROMPT_PATH.exists():
-        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+def _is_negative_feedback(text: str) -> bool:
+    return _contains_any(text, ("not helped", "did not help", "still", "\u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e", "\u0438\u0449\u0438 \u0433\u043b\u0443\u0431\u0436\u0435"))
 
-    try:
-        ai_decision = await classify_message(
-            prompt=prompt,
-            text=normalized.text,
-            language=normalized.language,
-            car_info=normalized.car_info,
-            conversation_history=user.conversation_history,
+
+def _is_positive_feedback(text: str) -> bool:
+    return _normalize(text) in {"helped", "fixed", "solved", "\u043f\u043e\u043c\u043e\u0433\u043b\u043e", "\u0440\u0435\u0448\u0435\u043d\u043e"}
+
+
+def _local_router(text: str, language: str) -> RouterDecision:
+    language = normalize_language_code(language)
+    if _is_social_general_text(text):
+        return RouterDecision(message_type="general", language=language)
+    if _is_negative_feedback(text):
+        return RouterDecision(
+            message_type="followup_deep",
+            language=language,
+            ready_to_search=True,
+            deep_search=True,
+            user_says_not_helped=True,
+            symptom=str(text or "")[:120],
         )
-        return _stabilize_decision(normalized.text, user, ai_decision)
-    except OpenAIRouterUnavailableError:
-        return _stabilize_decision(normalized.text, user, _local_router(normalized.text, normalized.language))
-    except Exception:
-        return _stabilize_decision(normalized.text, user, _local_router(normalized.text, normalized.language))
+    if _is_positive_feedback(text):
+        return RouterDecision(message_type="helped_feedback", language=language, user_says_helped=True)
+    return RouterDecision(
+        message_type="new_diagnostic",
+        language=language,
+        ready_to_search=bool(str(text or "").strip()),
+        symptom=str(text or "")[:120],
+    )
 
 
 def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDecision:
-    lowered = str(text or "").strip().lower()
-    has_car = _has_car_hint(lowered)
-    has_problem = _has_problem_hint(lowered)
-    has_diagnostic_intent = _has_diagnostic_intent(lowered)
-    has_helped = _has_feedback_helped(lowered)
-    has_deep = _has_feedback_deep(lowered)
-    is_greeting = _is_greeting(lowered)
-    is_social_general = _is_social_general_text(lowered)
-
-    if is_greeting:
-        if has_diagnostic_intent or has_problem or has_car:
-            return decision.model_copy(
-                update={
-                    "message_type": "new_diagnostic",
-                    "need_car_info": False,
-                    "need_clarification": False,
-                    "ready_to_search": True,
-                    "deep_search": False,
-                }
-            )
-        return decision.model_copy(
-            update={
-                "message_type": "general",
-                "need_car_info": False,
-                "ready_to_search": False,
-                "deep_search": False,
-                "response": "",
-            }
-        )
-
-    if is_social_general:
+    if _is_social_general_text(text):
         return decision.model_copy(
             update={
                 "message_type": "general",
@@ -322,50 +141,50 @@ def _stabilize_decision(text: str, user, decision: RouterDecision) -> RouterDeci
                 "response": "",
             }
         )
-
-    if has_deep:
+    if _is_negative_feedback(text):
         return decision.model_copy(
             update={
                 "message_type": "followup_deep",
                 "need_car_info": False,
                 "ready_to_search": True,
                 "deep_search": True,
-                "response": decision.response or "Let's dig deeper.",
+                "user_says_not_helped": True,
             }
         )
-
-    if has_diagnostic_intent or has_problem or has_car:
-        return decision.model_copy(
-            update={
-                "message_type": "new_diagnostic",
-                "need_car_info": False,
-                "need_clarification": False,
-                "ready_to_search": True,
-                "deep_search": False,
-                "response": "",
-            }
-        )
-
-    if has_helped:
+    if _is_positive_feedback(text):
         return decision.model_copy(
             update={
                 "message_type": "helped_feedback",
                 "need_car_info": False,
                 "ready_to_search": False,
                 "deep_search": False,
-                "response": decision.response or "Glad it helped.",
+                "user_says_helped": True,
             }
         )
-
-    if has_problem and decision.message_type == "clarification" and (getattr(user, "car_info", "") or decision.active_car):
+    if _has_car_reference(text) or _has_automotive_content(text):
         return decision.model_copy(
             update={
                 "message_type": "new_diagnostic",
                 "need_car_info": False,
-                "need_clarification": False,
                 "ready_to_search": True,
-                "deep_search": False,
+                "response": "",
             }
         )
-
     return decision
+
+
+async def route_message(normalized, user) -> RouterDecision:
+    prompt = PROMPT_PATH.read_text(encoding="utf-8") if PROMPT_PATH.exists() else ""
+    try:
+        decision = await classify_message(
+            prompt=prompt,
+            text=normalized.text,
+            language=normalized.language,
+            car_info=normalized.car_info,
+            conversation_history=user.conversation_history,
+        )
+    except OpenAIRouterUnavailableError:
+        decision = _local_router(normalized.text, normalized.language)
+    except Exception:
+        decision = _local_router(normalized.text, normalized.language)
+    return _stabilize_decision(normalized.text, user, decision)

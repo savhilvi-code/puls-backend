@@ -11,27 +11,27 @@ from app.services.response_source_service import filter_response_sources
 def _toyota_oil_links() -> list[dict]:
     return [
         {
-            "title": "Замена масла со снятием поддона (1G-GZE) - Toyota Crown (S130)",
+            "title": "Engine oil change for Toyota Crown 1G-GZE",
             "url": "https://example.com/engine-oil",
-            "description": "Объем 4,5 литра масла Esso 5W-40, фильтр Toyota.",
+            "description": "Owners discuss 5W-30 and 5W-40 engine oil.",
             "type": "link",
         },
         {
-            "title": "ТО / приводные ремни - Toyota Crown (S130)",
+            "title": "Drive belts for Toyota Crown",
             "url": "https://example.com/belts",
-            "description": "Приводные ремни и ролики.",
+            "description": "Belts and pulley replacement notes.",
             "type": "link",
         },
         {
-            "title": "Замена маслосъемных колпачков на 1G-GZE",
+            "title": "Valve stem seals on 1G-GZE",
             "url": "https://example.com/valve-seals",
-            "description": "Ремонт ГБЦ и колпачков.",
+            "description": "Oil consumption and cylinder head work.",
             "type": "link",
         },
         {
-            "title": "АКПП. Замена масла и подушки АКПП - Toyota Crown (S130)",
+            "title": "Automatic transmission fluid replacement",
             "url": "https://example.com/atf",
-            "description": "ATF, коробка передач, подушка АКПП.",
+            "description": "ATF service and transmission mounts.",
             "type": "link",
         },
     ]
@@ -40,9 +40,9 @@ def _toyota_oil_links() -> list[dict]:
 class ResponseSourceServiceTests(unittest.TestCase):
     def test_engine_oil_keeps_engine_oil_link(self):
         result = filter_response_sources(
-            current_query="Toyota Crown GS131 1G-GZE какое моторное масло использовать",
-            effective_symptom="какое моторное масло использовать",
-            answer_context="Рекомендуется 5W-30 или 5W-40.",
+            current_query="Toyota Crown 1G-GZE what engine oil to use",
+            effective_symptom="what engine oil to use",
+            answer_context="Use 5W-30 or 5W-40 engine oil.",
             links=_toyota_oil_links(),
             extracted_cases=[],
         )
@@ -51,9 +51,9 @@ class ResponseSourceServiceTests(unittest.TestCase):
 
     def test_engine_oil_removes_transmission_atf_link(self):
         result = filter_response_sources(
-            current_query="какое моторное масло использовать",
-            effective_symptom="какое моторное масло использовать",
-            answer_context="Рекомендуется 5W-30.",
+            current_query="what engine oil to use",
+            effective_symptom="what engine oil to use",
+            answer_context="Use 5W-30 engine oil.",
             links=_toyota_oil_links(),
             extracted_cases=[],
         )
@@ -62,9 +62,9 @@ class ResponseSourceServiceTests(unittest.TestCase):
 
     def test_engine_oil_removes_belt_link(self):
         result = filter_response_sources(
-            current_query="какое моторное масло использовать",
-            effective_symptom="какое моторное масло использовать",
-            answer_context="Рекомендуется 5W-30.",
+            current_query="what engine oil to use",
+            effective_symptom="what engine oil to use",
+            answer_context="Use 5W-30 engine oil.",
             links=_toyota_oil_links(),
             extracted_cases=[],
         )
@@ -73,16 +73,16 @@ class ResponseSourceServiceTests(unittest.TestCase):
 
     def test_valve_seal_link_depends_on_oil_consumption_context(self):
         no_consumption = filter_response_sources(
-            current_query="какое моторное масло использовать",
-            effective_symptom="какое моторное масло использовать",
-            answer_context="Рекомендуется 5W-30.",
+            current_query="what engine oil to use",
+            effective_symptom="what engine oil to use",
+            answer_context="Use 5W-30 engine oil.",
             links=_toyota_oil_links(),
             extracted_cases=[],
         )
         with_consumption = filter_response_sources(
-            current_query="какое моторное масло использовать",
-            effective_symptom="какое моторное масло использовать",
-            answer_context="Двигатель может иметь повышенный расход масла.",
+            current_query="what engine oil to use",
+            effective_symptom="what engine oil to use",
+            answer_context="The engine may have increased oil consumption.",
             links=_toyota_oil_links(),
             extracted_cases=[],
         )
@@ -94,9 +94,9 @@ class ResponseSourceServiceTests(unittest.TestCase):
         links = _toyota_oil_links()
 
         result = filter_response_sources(
-            current_query="Toyota Crown не заводится на горячую",
-            effective_symptom="не заводится на горячую",
-            answer_context="Проверьте искру и давление топлива.",
+            current_query="Toyota Crown stalls hot",
+            effective_symptom="stalls hot",
+            answer_context="Check spark and fuel pressure.",
             links=links,
             extracted_cases=[],
         )
@@ -108,9 +108,9 @@ class ResponseSourceServiceTests(unittest.TestCase):
         original_urls = [item["url"] for item in links]
 
         result = filter_response_sources(
-            current_query="какое моторное масло использовать",
-            effective_symptom="какое моторное масло использовать",
-            answer_context="Рекомендуется 5W-30.",
+            current_query="what engine oil to use",
+            effective_symptom="what engine oil to use",
+            answer_context="Use 5W-30 engine oil.",
             links=links,
             extracted_cases=[],
         )
@@ -126,11 +126,11 @@ class ResponseSourceChatFlowTests(unittest.TestCase):
             "links": _toyota_oil_links(),
             "extracted_cases": [
                 {
-                    "cause": "Для 1G-GZE владельцы используют 5W-30 или 5W-40.",
-                    "solution": "Выберите качественное моторное масло и масляный фильтр.",
+                    "cause": "Owners use 5W-30 or 5W-40 engine oil in 1G-GZE.",
+                    "solution": "Choose quality engine oil and replace the filter.",
                 }
             ],
-            "parser_summary": "Для Toyota Crown GS131 1G-GZE лучше использовать моторное масло 5W-30 или 5W-40.",
+            "parser_summary": "For Toyota Crown GS131 1G-GZE, owners commonly use 5W-30 or 5W-40 engine oil.",
             "topics_found": [],
             "_raw": {"links": _toyota_oil_links()},
         }
@@ -151,36 +151,14 @@ class ResponseSourceChatFlowTests(unittest.TestCase):
                 new=AsyncMock(
                     return_value=RouterDecision(
                         message_type="new_diagnostic",
-                        language="ru",
+                        language="en",
                         ready_to_search=True,
-                        active_car="Toyota Crown GS131 1G-GZE",
-                        symptom="какое моторное масло использовать",
                     )
                 ),
             ),
-            patch.object(
-                decision_engine,
-                "build_dialog_state",
-                return_value=SimpleNamespace(
-                    language="ru",
-                    active_car="Toyota Crown GS131 1G-GZE",
-                    should_search=True,
-                    should_deep_search=False,
-                    current_symptom="какое моторное масло использовать",
-                    previous_symptom="",
-                    is_greeting=False,
-                    is_feedback_helped=False,
-                    is_feedback_not_helped=False,
-                    needs_car_clarification=False,
-                    needs_problem_clarification=False,
-                    active_service_flow=False,
-                    service_target="",
-                    service_subtype="",
-                ),
-            ),
             patch.object(decision_engine, "get_latest_conversation_context", return_value={}),
-            patch.object(decision_engine, "_looks_like_service_advice_query", return_value=False),
             patch.object(decision_engine, "find_matching_case", new=AsyncMock(return_value=None)),
+            patch.object(decision_engine, "find_matching_history_case", new=AsyncMock(return_value=None)),
             patch.object(decision_engine, "can_run_parser", return_value=(True, {"requests_remaining": 5})),
             patch.object(decision_engine, "parse_diagnostic", new=AsyncMock(return_value=parsed_case)),
             patch.object(decision_engine, "run_diagnostic_provider", return_value=None),
@@ -191,8 +169,8 @@ class ResponseSourceChatFlowTests(unittest.TestCase):
             response = asyncio.run(
                 decision_engine.process_chat_message(
                     {
-                        "message": "Toyota Crown GS131 1G-GZE какое моторное масло использовать",
-                        "language": "ru",
+                        "message": "Toyota Crown GS131 1G-GZE what engine oil to use P0000",
+                        "language": "en",
                     },
                     source="web",
                 )
