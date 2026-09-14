@@ -309,6 +309,83 @@ def _looks_like_meta_followup(text: str, previous_assistant: str) -> bool:
     return asks_about_statement and (refers_to_assistant or overlaps_previous_wording)
 
 
+def _looks_like_context_capability_question(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    if not lowered:
+        return False
+    asks_about_assistant = _contains_any(
+        lowered,
+        (
+            "will you",
+            "can you",
+            "do you",
+            "you remember",
+            "puls remember",
+            "\u0442\u044b",
+            "\u0431\u0443\u0434\u0435\u0448\u044c",
+            "\u0441\u043c\u043e\u0436\u0435\u0448\u044c",
+            "puls",
+        ),
+    )
+    asks_about_persistence = _contains_any(
+        lowered,
+        (
+            "remember",
+            "saved",
+            "profile",
+            "my car",
+            "next conversation",
+            "next chat",
+            "\u043f\u043e\u043c\u043d",
+            "\u0441\u043e\u0445\u0440\u0430\u043d",
+            "\u0440\u0430\u0437\u0434\u0435\u043b",
+            "\u043c\u043e\u0439 \u0430\u0432\u0442\u043e\u043c\u043e\u0431\u0438\u043b",
+            "\u043c\u043e\u044f \u043c\u0430\u0448\u0438\u043d",
+            "\u0441\u043b\u0435\u0434\u0443\u044e\u0449",
+        ),
+    )
+    return asks_about_assistant and asks_about_persistence
+
+
+def _looks_like_vehicle_profile_question(text: str) -> bool:
+    lowered = _normalize_phrase(text)
+    if not lowered:
+        return False
+    asks_about_owned_vehicle = _contains_any(
+        lowered,
+        (
+            "what car",
+            "which car",
+            "my car",
+            "saved car",
+            "vehicle profile",
+            "\u043a\u0430\u043a\u0430\u044f \u0443 \u043c\u0435\u043d\u044f",
+            "\u043a\u0430\u043a\u043e\u0439 \u0443 \u043c\u0435\u043d\u044f",
+            "\u043c\u043e\u044f \u043c\u0430\u0448\u0438\u043d",
+            "\u043c\u043e\u0439 \u0430\u0432\u0442\u043e\u043c\u043e\u0431\u0438\u043b",
+            "\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043d\u0430\u044f \u043c\u0430\u0448\u0438\u043d",
+        ),
+    )
+    asks_for_fault_or_service = _contains_any(
+        lowered,
+        (
+            "problem",
+            "fault",
+            "diagnos",
+            "oil",
+            "fluid",
+            "repair",
+            "\u043f\u0440\u043e\u0431\u043b\u0435\u043c",
+            "\u043d\u0435\u0438\u0441\u043f\u0440\u0430\u0432",
+            "\u0434\u0438\u0430\u0433\u043d",
+            "\u043c\u0430\u0441\u043b",
+            "\u0436\u0438\u0434\u043a",
+            "\u0440\u0435\u043c\u043e\u043d\u0442",
+        ),
+    )
+    return asks_about_owned_vehicle and not asks_for_fault_or_service
+
+
 def _looks_like_feedback_not_helped(text: str, decision: RouterDecision) -> bool:
     return bool(
         decision.user_says_not_helped
@@ -534,16 +611,24 @@ async def _natural_chat_text(
     assistant_hint: str = "",
     fallback: str = "",
 ) -> str:
+    context_relevant = mode in {"META_CHAT", "CLARIFICATION"} or _looks_like_context_capability_question(
+        str(normalized.text or "")
+    ) or _looks_like_vehicle_profile_question(str(normalized.text or ""))
+    recent_conversation = _recent_messages(latest_context) if context_relevant else []
+    active_vehicle = context.active_car if context_relevant else ""
+    automotive_context = context.case_seed if context_relevant else ""
+    stored_facts = context.user_facts if context_relevant else []
     try:
         reply = await generate_natural_chat_reply(
             mode=mode,
             user_text=str(normalized.text or ""),
             language=context.language,
-            recent_conversation=_recent_messages(latest_context),
-            active_vehicle=context.active_car,
-            automotive_context=context.case_seed,
+            recent_conversation=recent_conversation,
+            active_vehicle=active_vehicle,
+            automotive_context=automotive_context,
             pending_clarification=fallback if mode == "CLARIFICATION" else "",
-            stored_facts=context.user_facts,
+            stored_facts=stored_facts,
+            context_relevant=context_relevant,
         )
     except (OpenAIRouterUnavailableError, Exception):
         reply = assistant_hint or fallback
@@ -685,9 +770,14 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
     conversation_car = str(latest_context.get("active_car") or "").strip()
     payload_car = str(normalized.car_info or "").strip()
     fallback_car = str(getattr(user, "car_info", "") or "").strip()
+    wants_context_or_profile = (
+        _looks_like_meta_followup(text, str(latest_context.get("last_assistant_text") or ""))
+        or _looks_like_context_capability_question(text)
+        or _looks_like_vehicle_profile_question(text)
+    )
 
     mode = "GENERAL_CHAT"
-    if _looks_like_meta_followup(text, str(latest_context.get("last_assistant_text") or "")):
+    if wants_context_or_profile:
         mode = "META_CHAT"
     elif _looks_like_feedback_helped(text, decision):
         mode = "FEEDBACK"
@@ -710,7 +800,9 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
     elif decision.message_type in {"new_diagnostic", "clarification"} and (decision.active_car or decision.car_info or _has_automotive_content(decision.symptom)):
         mode = "AUTOMOTIVE_NEW_CASE"
 
-    active_car = mentioned_car or conversation_car or payload_car or (fallback_car if mode not in {"GENERAL_CHAT", "META_CHAT"} else "")
+    active_car = mentioned_car or conversation_car or payload_car or (
+        fallback_car if mode not in {"GENERAL_CHAT", "META_CHAT"} or wants_context_or_profile else ""
+    )
     vehicle_id, active_car, resolved_vehicle = _resolve_vehicle(user_id=user.id, car_text=active_car)
     if active_car:
         normalized = normalized.model_copy(update={"car_info": active_car})

@@ -216,6 +216,7 @@ async def generate_natural_chat_reply(
     automotive_context: str = "",
     pending_clarification: str = "",
     stored_facts: list[str] | None = None,
+    context_relevant: bool = False,
 ) -> str:
     if not is_configured():
         raise OpenAIRouterUnavailableError("OpenAI is not configured. Set OPENAI_API_KEY.")
@@ -229,6 +230,7 @@ async def generate_natural_chat_reply(
         "automotive_context": automotive_context,
         "pending_clarification": pending_clarification,
         "stored_facts": stored_facts or [],
+        "context_relevant_to_current_message": bool(context_relevant),
     }
     client = get_openai_client()
     response = client.responses.create(
@@ -240,7 +242,15 @@ async def generate_natural_chat_reply(
             "Use only the context actually supplied in this request. "
             "Do not claim that conversation or vehicle history is unavailable when supplied context exists, "
             "and do not claim to remember information that was not supplied. "
-            "Use recent conversation and active vehicle only as background context. "
+            "Persisted context is normally silent background, not the subject of the answer. "
+            "Mention previous conversation, saved context, or active vehicle only when the current user message asks "
+            "to continue it, identify it, or discuss memory/history/context. "
+            "For simple greetings or casual small talk, do not mention vehicles, previous messages, sessions, "
+            "database state, supplied context, or why context exists. "
+            "Do not mention router decisions, backend mechanics, database mechanics, or internal state unless the user "
+            "explicitly asks how the system works. "
+            "If the user asks whether a saved vehicle profile persists, explain that saved vehicle/profile data "
+            "can be used in later conversations when supplied by the backend, without claiming unlimited memory. "
             "For general or meta conversation, do not diagnose, do not ask automotive intake questions, "
             "and do not mention parser, search, quota, sources, or deep search. "
             "For clarification, ask one useful conversational question only. "
