@@ -223,6 +223,58 @@ def _looks_like_detail_request(text: str) -> bool:
     )
 
 
+def _looks_like_meta_followup(text: str, previous_assistant: str) -> bool:
+    lowered = _normalize_phrase(text)
+    previous = _normalize_phrase(previous_assistant)
+    if not lowered or not previous:
+        return False
+    if _has_automotive_content(lowered) or _extract_active_car_from_text(lowered):
+        return False
+
+    asks_about_statement = lowered.endswith("?") or _contains_any(
+        lowered,
+        (
+            "what",
+            "why",
+            "mean",
+            "meaning",
+            "context",
+            "\u0447\u0442\u043e",
+            "\u043f\u043e\u0447\u0435\u043c\u0443",
+            "\u043a\u0430\u043a\u043e\u0439",
+            "\u043a\u0430\u043a\u043e\u0433\u043e",
+            "\u043f\u0440\u043e",
+            "\u0437\u043d\u0430\u0447\u0438\u0442",
+            "\u0441\u043c\u044b\u0441\u043b",
+        ),
+    )
+    refers_to_assistant = _contains_any(
+        lowered,
+        (
+            "you",
+            "your",
+            "that",
+            "this",
+            "said",
+            "meant",
+            "\u0442\u044b",
+            "\u044d\u0442\u043e",
+            "\u044d\u0442\u043e\u0442",
+            "\u044d\u0442\u0438\u043c",
+            "\u0441\u043a\u0430\u0437\u0430\u043b",
+            "\u0438\u043c\u0435\u0435\u0448\u044c",
+            "\u0438\u043c\u0435\u043b",
+            "\u0432\u0432\u0438\u0434\u0443",
+        ),
+    )
+    overlaps_previous_wording = any(
+        token in previous
+        for token in lowered.split()
+        if len(token) >= 5 and token not in {"\u043a\u0430\u043a\u043e\u0439", "\u043a\u0430\u043a\u043e\u0433\u043e", "which", "what"}
+    )
+    return asks_about_statement and (refers_to_assistant or overlaps_previous_wording)
+
+
 def _looks_like_feedback_not_helped(text: str, decision: RouterDecision) -> bool:
     return bool(
         decision.user_says_not_helped
@@ -409,6 +461,20 @@ def _general_conversation_text(language: str, assistant_hint: str = "", user_tex
     return "Doing fine, and I am here when you want to continue."
 
 
+def _meta_conversation_text(*, language: str, user_text: str, previous_assistant: str, active_car: str) -> str:
+    previous = str(previous_assistant or "").strip()
+    if language == "ru":
+        if active_car:
+            return (
+                f"\u042f \u043f\u0440\u043e \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u043c\u0430\u0448\u0438\u043d\u044b, \u043a\u043e\u0442\u043e\u0440\u0443\u044e \u043c\u044b \u043e\u0431\u0441\u0443\u0436\u0434\u0430\u043b\u0438: {active_car}. "
+                "\u0418\u043c\u0435\u043b \u0432 \u0432\u0438\u0434\u0443, \u0447\u0442\u043e \u0438\u0441\u0442\u043e\u0440\u0438\u044f \u044d\u0442\u043e\u0433\u043e \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0430 \u043e\u0441\u0442\u0430\u043b\u0430\u0441\u044c \u0443 \u043c\u0435\u043d\u044f \u0432 \u0444\u043e\u043d\u0435."
+            )
+        return "\u042f \u0438\u043c\u0435\u043b \u0432 \u0432\u0438\u0434\u0443 \u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0443\u044e \u0440\u0435\u043f\u043b\u0438\u043a\u0443 \u0438 \u0445\u043e\u0434 \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0430. \u041d\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u044e \u0434\u0438\u0430\u0433\u043d\u043e\u0441\u0442\u0438\u043a\u0443, \u043f\u0440\u043e\u0441\u0442\u043e \u0443\u0442\u043e\u0447\u043d\u044f\u044e, \u0447\u0442\u043e \u043c\u044b \u043f\u043e\u043d\u044f\u043b\u0438 \u0434\u0440\u0443\u0433 \u0434\u0440\u0443\u0433\u0430."
+    if active_car:
+        return f"I meant the car context we had been discussing: {active_car}. I was saying I still have that conversation context in the background."
+    return "I meant my previous reply and the thread of the conversation. I am not starting diagnostics from that question."
+
+
 def _clarification_text(*, language: str, active_car: str, symptom: str, stage: int = 1) -> str:
     car = f" \u043f\u043e {active_car}" if language == "ru" and active_car else f" on {active_car}" if active_car else ""
     if language == "ru":
@@ -550,6 +616,8 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         mode = "FEEDBACK"
     elif _looks_like_feedback_not_helped(text, decision):
         mode = "FEEDBACK"
+    elif _looks_like_meta_followup(text, str(latest_context.get("last_assistant_text") or "")):
+        mode = "META_CHAT"
     elif _looks_like_source_question(text) or _looks_like_detail_request(text):
         mode = "KNOWLEDGE_REQUEST"
     elif decision.message_type == "general" and not _has_automotive_content(text):
@@ -567,14 +635,14 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
     elif decision.ready_to_search:
         mode = "AUTOMOTIVE_NEW_CASE"
 
-    active_car = mentioned_car or conversation_car or payload_car or (fallback_car if mode != "GENERAL_CHAT" else "")
+    active_car = mentioned_car or conversation_car or payload_car or (fallback_car if mode not in {"GENERAL_CHAT", "META_CHAT"} else "")
     vehicle_id, active_car, resolved_vehicle = _resolve_vehicle(user_id=user.id, car_text=active_car)
     if active_car:
         normalized = normalized.model_copy(update={"car_info": active_car})
 
     case_seed = _build_case_seed(latest_context, getattr(user, "conversation_history", "") or "", text)
     current_symptom = case_seed if mode in {"AUTOMOTIVE_CONTINUATION", "FEEDBACK"} else text
-    if mode == "KNOWLEDGE_REQUEST":
+    if mode in {"KNOWLEDGE_REQUEST", "META_CHAT"}:
         current_symptom = case_seed or text
 
     messages = (latest_context or {}).get("recent_messages") or []
@@ -603,7 +671,7 @@ def _analyze_context(*, normalized, user, decision: RouterDecision, latest_conte
         vehicle_id=vehicle_id,
         current_symptom=current_symptom,
         case_seed=case_seed,
-        user_facts=[text] if mode != "GENERAL_CHAT" and text else [],
+        user_facts=[text] if mode not in {"GENERAL_CHAT", "META_CHAT"} and text else [],
         evidence_links=[],
         should_search=should_search,
         should_deep_search=should_deep_search,
@@ -654,14 +722,22 @@ async def process_chat_message(payload: dict, source: str) -> ChatResponse:
         latest_context=latest_context,
     )
 
-    if context.mode == "GENERAL_CHAT":
+    if context.mode in {"GENERAL_CHAT", "META_CHAT"}:
         preserved_car = str((latest_context or {}).get("active_car") or "").strip()
         if preserved_car:
             vehicle_id, preserved_car, _ = _resolve_vehicle(user_id=user.id, car_text=preserved_car)
             context.active_car = preserved_car
             context.vehicle_id = vehicle_id
             context.current_symptom = _latest_non_social_user_text(latest_context, getattr(user, "conversation_history", "") or "")
-        answer_text = _general_conversation_text(context.language, decision.response, normalized.text)
+        if context.mode == "META_CHAT":
+            answer_text = _meta_conversation_text(
+                language=context.language,
+                user_text=normalized.text,
+                previous_assistant=str((latest_context or {}).get("last_assistant_text") or ""),
+                active_car=context.active_car,
+            )
+        else:
+            answer_text = _general_conversation_text(context.language, decision.response, normalized.text)
         return await _persist_and_return(
             user=user,
             normalized=normalized,
