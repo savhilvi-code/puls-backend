@@ -12,12 +12,18 @@ BRAND_PATTERN = re.compile(
     r"genesis|lada)\b(?:\s+[A-Za-z0-9.-]+){0,7}",
     re.IGNORECASE,
 )
+
 ENGINE_PATTERN = re.compile(
     r"\b(?:[1-9][.,]\d\s?(?:l|liter)|v[68]|i[46]|sr20vet|sr20|qr20|qr25|vq35|"
-    r"1zz|2zz|2gr|1gr|1g[- ]?gze|1ggze|ej20|ej25|fa20|fb25|k20|k24|m54|m57|n52|n54|n55|b58)\b",
+    r"1zz|2zz|2gr|1gr|1g[- ]?gze|1ggze|ej20|ej25|fa20|fb25|k20|k24|m54|m57|"
+    r"n52|n54|n55|b58)\b",
     re.IGNORECASE,
 )
-DTC_PATTERN = re.compile(r"\b[pucb]\d{4}\b", re.IGNORECASE)
+
+DTC_PATTERN = re.compile(
+    r"\b[pucb]\d{4}\b",
+    re.IGNORECASE,
+)
 
 AUTOMOTIVE_TERMS = (
     "engine",
@@ -44,6 +50,7 @@ AUTOMOTIVE_TERMS = (
     "oil",
     "fluid",
     "машин",
+    "автомоб",
     "двигат",
     "мотор",
     "холост",
@@ -64,6 +71,12 @@ AUTOMOTIVE_TERMS = (
     "шум",
     "масло",
     "жидк",
+    "завод",
+    "стартер",
+    "акпп",
+    "коробк",
+    "вариатор",
+    "тормоз",
 )
 
 
@@ -79,60 +92,192 @@ class TurnContext:
     problem_class: str = "OTHER"
     clarification_question: str = ""
     needs_research: bool = False
-    technical_facts: list[dict[str, Any]] = field(default_factory=list)
+    technical_facts: list[dict[str, Any]] = field(
+        default_factory=list
+    )
 
 
 def normalize_phrase(text: str) -> str:
-    return " ".join(str(text or "").lower().split())
+    return " ".join(
+        str(text or "").lower().split()
+    )
 
 
 def word_count(text: str) -> int:
-    return len([part for part in re.split(r"\s+", str(text or "").strip()) if part])
+    return len(
+        [
+            part
+            for part in re.split(
+                r"\s+",
+                str(text or "").strip(),
+            )
+            if part
+        ]
+    )
 
 
-def contains_any(text: str, terms: tuple[str, ...]) -> bool:
+def contains_any(
+    text: str,
+    terms: tuple[str, ...],
+) -> bool:
     lowered = normalize_phrase(text)
-    return any(term in lowered for term in terms)
+    return any(
+        term in lowered
+        for term in terms
+    )
 
 
 def plain_text_response(text: str) -> str:
     cleaned = str(text or "").strip()
-    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
-    cleaned = cleaned.replace("**", "").replace("__", "")
-    cleaned = re.sub(r"(?m)^\s*[-*]\s+", "", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(
+        r"(?m)^\s{0,3}#{1,6}\s*",
+        "",
+        cleaned,
+    )
+    cleaned = cleaned.replace(
+        "**",
+        "",
+    ).replace(
+        "__",
+        "",
+    )
+    cleaned = re.sub(
+        r"(?m)^\s*[-*]\s+",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"\n{3,}",
+        "\n\n",
+        cleaned,
+    )
     return cleaned.strip()
 
 
-def vehicle_label(vehicle: dict[str, Any] | None) -> str:
+def vehicle_label(
+    vehicle: dict[str, Any] | None,
+) -> str:
+    """
+    Canonical Supabase V2 vehicle label.
+
+    vehicles:
+      make
+      model
+      generation
+      year
+      engine_code
+
+    Do not use legacy brand / engine fields.
+    """
     vehicle = vehicle or {}
-    parts = [vehicle.get("brand"), vehicle.get("model"), vehicle.get("year"), vehicle.get("engine")]
-    return " ".join(str(part).strip() for part in parts if str(part or "").strip()).strip()
+
+    parts = [
+        vehicle.get("make"),
+        vehicle.get("model"),
+        vehicle.get("generation"),
+        vehicle.get("year"),
+        vehicle.get("engine_code"),
+    ]
+
+    return " ".join(
+        str(part).strip()
+        for part in parts
+        if str(part or "").strip()
+    ).strip()
 
 
 def extract_vehicle_label(text: str) -> str:
-    raw = " ".join(str(text or "").replace(",", " ").split())
+    """
+    Extract a vehicle mention from free text.
+
+    This identifies a mention only. It does NOT create a vehicle
+    and does NOT imply ownership by the user.
+    """
+    raw = " ".join(
+        str(text or "")
+        .replace(",", " ")
+        .split()
+    )
+
     match = BRAND_PATTERN.search(raw)
+
     if not match:
         return ""
-    label = match.group(0).strip(" .,:;!?")
-    year = re.search(r"\b(19[8-9]\d|20[0-3]\d)\b", raw)
+
+    label = match.group(0).strip(
+        " .,:;!?"
+    )
+
+    year = re.search(
+        r"\b(19[8-9]\d|20[0-3]\d)\b",
+        raw,
+    )
+
     engine = ENGINE_PATTERN.search(raw)
-    if year and year.group(0) not in label:
-        label = f"{label} {year.group(0)}"
-    if engine and engine.group(0).lower() not in label.lower():
-        label = f"{label} {engine.group(0)}"
+
+    if (
+        year
+        and year.group(0) not in label
+    ):
+        label = (
+            f"{label} {year.group(0)}"
+        )
+
+    if (
+        engine
+        and engine.group(0).lower()
+        not in label.lower()
+    ):
+        label = (
+            f"{label} {engine.group(0)}"
+        )
+
     return label
 
 
 def has_automotive_content(text: str) -> bool:
-    return bool(extract_vehicle_label(text) or DTC_PATTERN.search(str(text or "")) or contains_any(text, AUTOMOTIVE_TERMS))
+    """
+    Lightweight routing signal only.
+
+    Automotive content can be detected by:
+    - explicit vehicle mention;
+    - DTC;
+    - automotive terminology.
+
+    This function must not create diagnostic artifacts.
+    """
+    raw = str(text or "")
+
+    return bool(
+        extract_vehicle_label(raw)
+        or DTC_PATTERN.search(raw)
+        or contains_any(
+            raw,
+            AUTOMOTIVE_TERMS,
+        )
+    )
 
 
 def is_social_general_text(text: str) -> bool:
-    lowered = normalize_phrase(text).strip(" .,:;!?")
-    if not lowered or has_automotive_content(lowered):
+    """
+    Detect short social/general phrases.
+
+    Automotive content always wins over this heuristic.
+    """
+    lowered = normalize_phrase(
+        text
+    ).strip(
+        " .,:;!?"
+    )
+
+    if (
+        not lowered
+        or has_automotive_content(
+            lowered
+        )
+    ):
         return False
+
     social_terms = (
         "hi",
         "hello",
@@ -150,11 +295,19 @@ def is_social_general_text(text: str) -> bool:
         "ок",
         "окей",
     )
-    return word_count(lowered) <= 6 and any(term in lowered for term in social_terms)
+
+    return (
+        word_count(lowered) <= 6
+        and any(
+            term in lowered
+            for term in social_terms
+        )
+    )
 
 
 def looks_like_meta_question(text: str) -> bool:
     lowered = normalize_phrase(text)
+
     return contains_any(
         lowered,
         (
@@ -176,29 +329,151 @@ def looks_like_meta_question(text: str) -> bool:
 
 def classify_problem(text: str) -> str:
     lowered = normalize_phrase(text)
+
     classes = (
-        ("NO_START", ("no start", "won't start", "does not start", "cranks", "no crank", "не завод", "крутит", "стартер")),
-        ("HARD_START", ("hard start", "starts badly", "плохо завод", "долго завод")),
-        ("STALL", ("stall", "stalls", "глох", "заглох")),
-        ("MISFIRE", ("misfire", "troits", "троит", "пропуск")),
-        ("VIBRATION", ("vibration", "vibrates", "вибрац")),
-        ("NOISE", ("noise", "knock", "rattle", "hum", "шум", "стук", "гул")),
-        ("POWER_LOSS", ("power loss", "no power", "doesn't pull", "under load", "не тянет", "потеря тяг", "нагруз")),
-        ("OVERHEATING", ("overheat", "temperature", "перегре", "температур")),
-        ("WARNING_DTC", ("dtc", "obd", "check engine", "ошиб", "чек")),
-        ("TRANSMISSION", ("transmission", "gearbox", "cvt", "atf", "коробк", "акпп", "вариатор")),
-        ("SERVICE_REFERENCE", ("oil", "fluid", "coolant", "service", "масло", "жидк", "антифриз", "сервис")),
+        (
+            "NO_START",
+            (
+                "no start",
+                "won't start",
+                "does not start",
+                "no crank",
+                "не заводится",
+                "не завод",
+                "не запускается",
+                "не запуск",
+                "стартер не крут",
+            ),
+        ),
+        (
+            "HARD_START",
+            (
+                "hard start",
+                "starts badly",
+                "hard to start",
+                "плохо завод",
+                "плохо запуска",
+                "долго завод",
+                "долго запуска",
+                "трудно завод",
+            ),
+        ),
+        (
+            "STALL",
+            (
+                "stall",
+                "stalls",
+                "глох",
+                "заглох",
+            ),
+        ),
+        (
+            "MISFIRE",
+            (
+                "misfire",
+                "troits",
+                "троит",
+                "пропуск",
+            ),
+        ),
+        (
+            "VIBRATION",
+            (
+                "vibration",
+                "vibrates",
+                "вибрац",
+            ),
+        ),
+        (
+            "NOISE",
+            (
+                "noise",
+                "knock",
+                "rattle",
+                "hum",
+                "шум",
+                "стук",
+                "гул",
+            ),
+        ),
+        (
+            "POWER_LOSS",
+            (
+                "power loss",
+                "no power",
+                "doesn't pull",
+                "under load",
+                "не тянет",
+                "потеря тяг",
+                "нагруз",
+            ),
+        ),
+        (
+            "OVERHEATING",
+            (
+                "overheat",
+                "temperature",
+                "перегре",
+                "температур",
+            ),
+        ),
+        (
+            "WARNING_DTC",
+            (
+                "dtc",
+                "obd",
+                "check engine",
+                "ошиб",
+                "чек",
+            ),
+        ),
+        (
+            "TRANSMISSION",
+            (
+                "transmission",
+                "gearbox",
+                "cvt",
+                "atf",
+                "коробк",
+                "акпп",
+                "вариатор",
+            ),
+        ),
+        (
+            "SERVICE_REFERENCE",
+            (
+                "oil",
+                "fluid",
+                "coolant",
+                "service",
+                "масло",
+                "жидк",
+                "антифриз",
+                "сервис",
+            ),
+        ),
     )
+
     for label, terms in classes:
-        if any(term in lowered for term in terms):
+        if any(
+            term in lowered
+            for term in terms
+        ):
             return label
+
     return "OTHER"
 
 
-def symptom_has_operating_detail(text: str) -> bool:
+def symptom_has_operating_detail(
+    text: str,
+) -> bool:
     lowered = normalize_phrase(text)
-    if DTC_PATTERN.search(text):
+
+    if DTC_PATTERN.search(
+        str(text or "")
+    ):
         return True
+
     detail_terms = (
         "cold",
         "hot",
@@ -216,25 +491,53 @@ def symptom_has_operating_detail(text: str) -> bool:
         "под нагруз",
         "на холост",
     )
-    return any(term in lowered for term in detail_terms)
+
+    return any(
+        term in lowered
+        for term in detail_terms
+    )
 
 
-def clarification_for(language: str, *, missing: str, problem_class: str = "OTHER") -> str:
-    ru = str(language or "").lower().startswith("ru")
+def clarification_for(
+    language: str,
+    *,
+    missing: str,
+    problem_class: str = "OTHER",
+) -> str:
+    ru = str(
+        language or ""
+    ).lower().startswith(
+        "ru"
+    )
+
     if missing == "vehicle":
-        return "По какой именно машине это происходит?" if ru else "Which vehicle is this happening on?"
+        return (
+            "По какой именно машине это происходит?"
+            if ru
+            else "Which vehicle is this happening on?"
+        )
+
     if problem_class == "NO_START":
         return (
             "Уточни один момент: стартер крутит двигатель или вообще нет прокрутки?"
             if ru
             else "One key detail: does the starter crank the engine, or is there no crank at all?"
         )
+
+    if problem_class == "HARD_START":
+        return (
+            "Уточни, пожалуйста: стартер крутит нормально, но двигатель запускается долго, или стартер тоже крутит медленно?"
+            if ru
+            else "Please clarify: does the starter crank normally but the engine takes a long time to start, or is the starter itself cranking slowly?"
+        )
+
     if problem_class == "NOISE":
         return (
             "Где слышен шум и когда он появляется: на холостых, при разгоне, на кочках или при торможении?"
             if ru
             else "Where is the noise coming from, and when does it happen: idle, acceleration, bumps, or braking?"
         )
+
     return (
         "Когда именно проявляется симптом: на холодную, на горячую, на холостых или под нагрузкой?"
         if ru
@@ -242,29 +545,90 @@ def clarification_for(language: str, *, missing: str, problem_class: str = "OTHE
     )
 
 
-def extract_technical_events(text: str, *, answer: str = "") -> list[dict[str, Any]]:
-    source = str(text or "").strip()
-    if not source or is_social_general_text(source) or looks_like_meta_question(source):
+def extract_technical_events(
+    text: str,
+    *,
+    answer: str = "",
+) -> list[dict[str, Any]]:
+    """
+    Convert confirmed information from the current turn into canonical
+    vehicle_events payloads.
+
+    Supabase V2 vehicle_events fields used here:
+      event_type
+      title
+      details
+      source_kind
+
+    Ownership fields (vehicle_id/problem_id) and event_date are added
+    by v2_repository.create_vehicle_event().
+    """
+    source = str(
+        text or ""
+    ).strip()
+
+    if (
+        not source
+        or is_social_general_text(
+            source
+        )
+        or looks_like_meta_question(
+            source
+        )
+    ):
         return []
-    events: list[dict[str, Any]] = []
-    for code in sorted(set(match.group(0).upper() for match in DTC_PATTERN.finditer(source))):
+
+    events: list[
+        dict[str, Any]
+    ] = []
+
+    codes = sorted(
+        {
+            match.group(0).upper()
+            for match in DTC_PATTERN.finditer(
+                source
+            )
+        }
+    )
+
+    for code in codes:
         events.append(
             {
                 "event_type": "DTC",
                 "title": code,
-                "description": f"User reported diagnostic trouble code {code}.",
-                "event_data": {"code": code, "source_text": source},
-                "source": "user",
+                "details": {
+                    "code": code,
+                    "source_text": source,
+                },
+                "source_kind": "USER",
             }
         )
-    if has_automotive_content(source):
+
+    if has_automotive_content(
+        source
+    ):
+        details: dict[str, Any] = {
+            "source_text": source,
+        }
+
+        if str(
+            answer or ""
+        ).strip():
+            details[
+                "assistant_answer"
+            ] = str(
+                answer
+            ).strip()
+
         events.append(
             {
                 "event_type": "SYMPTOM",
-                "title": classify_problem(source),
-                "description": source,
-                "event_data": {"source_text": source, "assistant_answer": answer},
-                "source": "user",
+                "title": classify_problem(
+                    source
+                ),
+                "details": details,
+                "source_kind": "USER",
             }
         )
+
     return events
