@@ -1,22 +1,28 @@
-from fastapi import APIRouter, HTTPException
+from __future__ import annotations
 
-from app.schemas.parser import DiagnosticRequest
-from app.services.parser_service import ParserUnavailableError, parse_diagnostic
+from fastapi import APIRouter, HTTPException, Request
 
-router = APIRouter(tags=["parser"])
+from app.database.supabase import get_supabase_client, rows
+from app.services.auth_service import get_or_create_profile
+from app.services import v2_repository as repo
 
-
-@router.post("/search")
-async def search(payload: DiagnosticRequest):
-    try:
-        return await parse_diagnostic(payload.model_dump())
-    except ParserUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+router = APIRouter(prefix="/api", tags=["research"])
 
 
-@router.post("/diagnose")
-async def diagnose_route(payload: DiagnosticRequest):
-    try:
-        return await parse_diagnostic(payload.model_dump())
-    except ParserUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+@router.get("/problems/{problem_id}/research")
+async def problem_research(problem_id: int, request: Request) -> dict:
+    user = await get_or_create_profile(request=request, require_auth=True)
+    problem = repo.get_problem(user_id=user.id, problem_id=problem_id)
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found.")
+    episodes = rows(
+        get_supabase_client()
+        .table("search_episodes")
+        .select("*, search_runs(*)")
+        .eq("user_id", user.id)
+        .eq("problem_id", problem_id)
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
+    )
+    return {"episodes": episodes}

@@ -11,8 +11,10 @@ class NormalizedInput(BaseModel):
     email: str = ""
     username: str = ""
     first_name: str = ""
-    car_info: str = ""
     language: str = "en"
+    conversation_id: int | None = None
+    vehicle_id: int | None = None
+    problem_id: int | None = None
 
 
 class ChatRequest(NormalizedInput):

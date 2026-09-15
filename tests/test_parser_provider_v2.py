@@ -1,0 +1,106 @@
+import asyncio
+import os
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from app.schemas.parser import DiagnosticRequest
+from app.services import parser_engine, parser_service, search_provider
+
+
+def _request(mode: str = "normal") -> DiagnosticRequest:
+    return DiagnosticRequest(
+        query="Toyota Crown 1G-GZE airflow meter setup",
+        lang="en",
+        car_info="Toyota Crown GS131 1G-GZE",
+        evidence_context="Stage 1 found airflow references.",
+        mode=mode,
+    )
+
+
+def _parser_payload(summary: str = "diagnosis") -> dict:
+    return {
+        "summary": summary,
+        "common_causes": [{"cause": "cause"}],
+        "solutions": [{"title": "check", "description": "solution"}],
+        "links": [{"title": "source", "url": "https://example.com/thread", "description": "details", "type": "link"}],
+        "topics_found": [],
+        "recommendation": "start here",
+        "need_more_info": False,
+    }
+
+
+class ParserProviderV2Tests(unittest.TestCase):
+    def test_openai_provider_uses_expanded_context_size_for_expanded_stage(self):
+        captured = {}
+
+        def fake_openai_search(client, data, user_message, domains, *, system_prompt):
+            captured["mode"] = data.mode
+            return SimpleNamespace(output_text='{"summary":"openai ok"}')
+
+        with (
+            patch.dict(os.environ, {"SEARCH_PROVIDER": "openai", "OPENAI_API_KEY": "test"}, clear=False),
+            patch.object(search_provider, "OpenAI", return_value=object()),
+            patch.object(search_provider, "run_openai_search", side_effect=fake_openai_search) as openai_call,
+            patch.object(search_provider, "run_claude_search") as claude_call,
+        ):
+            result = search_provider.run_search_provider(
+                data=_request(mode="expanded"),
+                user_message="message",
+                allowed_domains=["example.com"],
+                fallback_domains=[],
+                system_prompt="prompt",
+                search_hints=[],
+                extract_json=parser_engine.extract_json,
+                result_matches_request=lambda result, data: True,
+            )
+
+        self.assertEqual(result["summary"], "openai ok")
+        self.assertEqual(captured["mode"], "expanded")
+        openai_call.assert_called_once()
+        claude_call.assert_not_called()
+
+    def test_parser_response_contract_is_preserved_inside_stage_tool(self):
+        with patch.object(parser_service, "diagnose", new=AsyncMock(return_value=_parser_payload("contract ok"))):
+            result = asyncio.run(
+                parser_service.parse_diagnostic(
+                    {
+                        "active_car": "Toyota Crown GS131 1G-GZE",
+                        "symptom": "airflow meter setup",
+                        "query": "airflow meter setup",
+                        "evidence_context": "previous stage",
+                        "mode": "normal",
+                        "language": "en",
+                    }
+                )
+            )
+
+        self.assertEqual(
+            set(result.keys()),
+            {"forums_found", "links", "extracted_cases", "parser_summary", "topics_found", "_raw"},
+        )
+        self.assertEqual(result["parser_summary"], "contract ok")
+        self.assertEqual(result["links"][0]["url"], "https://example.com/thread")
+
+    def test_remote_parser_payload_uses_evidence_context_not_chat_history(self):
+        captured = {}
+
+        async def fake_remote(data, url):
+            captured.update(data.model_dump())
+            return _parser_payload("remote ok")
+
+        with (
+            patch.object(parser_engine, "_remote_parser_url", return_value="https://remote.example/search"),
+            patch.object(parser_engine, "_call_remote_parser", new=fake_remote),
+            patch.object(parser_engine, "run_search_provider") as provider_call,
+        ):
+            result = asyncio.run(parser_engine.diagnose(_request()))
+
+        self.assertEqual(result["summary"], "remote ok")
+        self.assertIn("evidence_context", captured)
+        self.assertNotIn("conversation" + "_history", captured)
+        provider_call.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

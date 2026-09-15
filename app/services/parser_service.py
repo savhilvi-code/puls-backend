@@ -470,7 +470,9 @@ def _merge_embedded_json_payload(data: dict) -> dict:
 
 
 async def parse_diagnostic(router_json: dict) -> dict:
-    deep_search = bool(router_json.get("deep_search", False))
+    mode = str(router_json.get("mode") or "normal").strip().lower()
+    if mode not in {"normal", "expanded"}:
+        mode = "normal"
     query = str(
         router_json.get("query")
         or router_json.get("symptom")
@@ -482,8 +484,8 @@ async def parse_diagnostic(router_json: dict) -> dict:
         query=query,
         lang=str(router_json.get("language", "en") or "en"),
         car_info=str(router_json.get("active_car") or router_json.get("car_info") or ""),
-        conversation_history=str(router_json.get("conversation_history") or ""),
-        mode="deep" if deep_search else "normal",
+        evidence_context=str(router_json.get("evidence_context") or ""),
+        mode=mode,
     )
     focus_group = _extract_focus_group_safe(query)
 

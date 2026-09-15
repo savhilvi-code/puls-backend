@@ -1,10 +1,14 @@
-import os
+from __future__ import annotations
+
 import base64
 import json
+import os
 from functools import lru_cache
 from typing import Any
 
 from supabase import Client, create_client
+
+from app.schemas.user import UserRecord
 
 
 class SupabaseUnavailableError(RuntimeError):
@@ -19,16 +23,11 @@ def _env_value(name: str) -> str:
     return str(os.getenv(name, "") or "").strip()
 
 
-def is_supabase_configured() -> bool:
-    return bool(_env_value("SUPABASE_URL") and _supabase_key())
-
-
-def _supabase_key() -> str:
+def _server_key() -> str:
     return (
         _env_value("SUPABASE_SERVICE_ROLE_KEY")
         or _env_value("SUPABASE_SECRET_KEY")
         or _env_value("SUPABASE_SERVICE_KEY")
-        or _env_value("SUPABASE_KEY")
     )
 
 
@@ -38,9 +37,15 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
         return {}
     payload = parts[1] + "=" * (-len(parts[1]) % 4)
     try:
-        return json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8"))
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def is_supabase_configured() -> bool:
+    return bool(_env_value("SUPABASE_URL") and _server_key())
 
 
 def supabase_key_source() -> str:
@@ -50,8 +55,8 @@ def supabase_key_source() -> str:
         return "SUPABASE_SECRET_KEY"
     if _env_value("SUPABASE_SERVICE_KEY"):
         return "SUPABASE_SERVICE_KEY"
-    if _env_value("SUPABASE_KEY"):
-        return "SUPABASE_KEY"
+    if _env_value("SUPABASE_KEY") or _env_value("SUPABASE_ANON_KEY"):
+        return "publishable_key_ignored_for_server_writes"
     return ""
 
 
@@ -64,13 +69,11 @@ def is_supabase_service_role_env_present() -> bool:
 
 
 def is_supabase_service_key_configured() -> bool:
-    key = _supabase_key()
+    key = _server_key()
     if not key:
         return False
     if key.startswith("sb_secret_"):
         return True
-    if key.startswith("sb_publishable_"):
-        return False
     payload = _decode_jwt_payload(key)
     return payload.get("role") == "service_role"
 
@@ -78,38 +81,34 @@ def is_supabase_service_key_configured() -> bool:
 @lru_cache(maxsize=1)
 def get_supabase_client() -> Client:
     url = _env_value("SUPABASE_URL")
-    key = _supabase_key()
+    key = _server_key()
     if not url or not key:
-        raise SupabaseUnavailableError("Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
+        raise SupabaseUnavailableError("Supabase server client is not configured.")
     if url.endswith("/rest/v1") or url.endswith("/rest/v1/"):
         url = url[: url.index("/rest/v1")]
     try:
         return create_client(url, key)
     except Exception as exc:  # pragma: no cover - transport/config failures
-        raise SupabaseUnavailableError(f"Failed to initialize Supabase client: {exc}") from exc
+        raise SupabaseUnavailableError("Failed to initialize Supabase server client.") from exc
 
 
-def _client() -> Client:
-    return get_supabase_client()
+def rows(response) -> list[dict[str, Any]]:
+    data = getattr(response, "data", []) or []
+    return data if isinstance(data, list) else []
 
 
-def _map_user_row(row: dict[str, Any]):
-    from app.schemas.user import UserRecord
-
+def _map_user_row(row: dict[str, Any]) -> UserRecord:
     return UserRecord(
         id=row.get("id"),
-        auth_user_id=row.get("auth_user_id") or "",
-        email=row.get("email") or "",
-        username=row.get("name") or "",
+        auth_user_id=str(row.get("auth_user_id") or ""),
+        email=str(row.get("email") or ""),
+        username=str(row.get("name") or row.get("full_name") or ""),
         first_name="",
-        car_info=row.get("car_info") or "",
-        language=row.get("language") or "en",
-        conversation_history=row.get("conversation_history") or "",
-        requests_left=int(row.get("requests_left") or 0),
+        language=str(row.get("language") or "en"),
     )
 
 
-def find_user_by_fields(*, auth_user_id: str = "", email: str = ""):
+def find_user_by_fields(*, auth_user_id: str = "", email: str = "") -> UserRecord | None:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
 
@@ -118,118 +117,71 @@ def find_user_by_fields(*, auth_user_id: str = "", email: str = ""):
         filters.append(("auth_user_id", auth_user_id))
     if email:
         filters.append(("email", email))
-
     if not filters:
         return None
 
     last_error: Exception | None = None
     for column, value in filters:
         try:
-            response = _client().table("users").select("*").eq(column, value).limit(1).execute()
-            rows = getattr(response, "data", []) or []
-            if rows:
-                return _map_user_row(rows[0])
+            response = get_supabase_client().table("users").select("*").eq(column, value).limit(1).execute()
+            found = rows(response)
+            if found:
+                return _map_user_row(found[0])
         except Exception as exc:
             last_error = exc
-
     if last_error is not None:
-        raise SupabaseOperationError(f"Failed to find user: {last_error}") from last_error
+        raise SupabaseOperationError("Failed to find user profile.") from last_error
     return None
 
 
-def create_user_record(payload: dict[str, Any]):
+def get_user_by_id(user_id: int) -> UserRecord | None:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
-
     try:
-        response = _client().table("users").insert(payload).execute()
-        rows = getattr(response, "data", []) or []
-        if not rows:
-            raise SupabaseOperationError("Supabase insert returned no rows.")
-        return _map_user_row(rows[0])
+        response = get_supabase_client().table("users").select("*").eq("id", user_id).limit(1).execute()
+        found = rows(response)
+        return _map_user_row(found[0]) if found else None
     except Exception as exc:
-        raise SupabaseOperationError(f"Failed to create user: {exc}") from exc
+        raise SupabaseOperationError("Failed to get user profile.") from exc
 
 
-def update_user_record(user_id: int, payload: dict[str, Any]):
+def create_user_record(payload: dict[str, Any]) -> UserRecord:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
-
     try:
-        response = _client().table("users").update(payload).eq("id", user_id).execute()
-        rows = getattr(response, "data", []) or []
-        if rows:
-            return _map_user_row(rows[0])
-        return None
+        response = get_supabase_client().table("users").insert(payload).execute()
+        found = rows(response)
+        if not found:
+            raise SupabaseOperationError("Supabase insert returned no profile row.")
+        return _map_user_row(found[0])
+    except SupabaseOperationError:
+        raise
     except Exception as exc:
-        raise SupabaseOperationError(f"Failed to update user: {exc}") from exc
+        raise SupabaseOperationError("Failed to create user profile.") from exc
 
 
-def decrement_requests_left(user_id: int):
+def update_user_record(user_id: int, payload: dict[str, Any]) -> UserRecord | None:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
-
-    user = get_user_by_id(user_id)
-    if user is None:
-        raise SupabaseOperationError("User not found while decrementing requests_left.")
-
-    next_value = max(int(user.requests_left or 0) - 1, 0)
-    return update_user_record(user_id, {"requests_left": next_value})
-
-
-def update_conversation_history(user_id: int, conversation_history: str):
-    return update_user_record(user_id, {"conversation_history": conversation_history})
-
-
-def update_car_info(user_id: int, car_info: str):
-    return update_user_record(user_id, {"car_info": car_info})
-
-
-def get_user_by_id(user_id: int):
-    if not is_supabase_configured():
-        raise SupabaseUnavailableError("Supabase is not configured.")
-
     try:
-        response = _client().table("users").select("*").eq("id", user_id).limit(1).execute()
-        rows = getattr(response, "data", []) or []
-        if rows:
-            return _map_user_row(rows[0])
-        return None
+        response = get_supabase_client().table("users").update(payload).eq("id", user_id).execute()
+        found = rows(response)
+        return _map_user_row(found[0]) if found else None
     except Exception as exc:
-        raise SupabaseOperationError(f"Failed to get user by id: {exc}") from exc
+        raise SupabaseOperationError("Failed to update user profile.") from exc
 
 
-def find_knowledge_case(*, text: str, car_info: str):
-    if not is_supabase_configured():
-        raise SupabaseUnavailableError("Supabase is not configured.")
-
+def get_auth_user_from_bearer(token: str) -> dict[str, str]:
+    if not token:
+        return {}
     try:
-        query = _client().table("knowledge_cases").select("*").ilike("symptom_title", f"%{text.strip()}%").limit(5)
-        response = query.execute()
-        return getattr(response, "data", []) or []
+        auth_response = get_supabase_client().auth.get_user(token)
+        auth_user = getattr(auth_response, "user", None)
+        if auth_user is None:
+            return {}
+        return {
+            "auth_user_id": str(getattr(auth_user, "id", "") or ""),
+            "email": str(getattr(auth_user, "email", "") or ""),
+        }
     except Exception as exc:
-        raise SupabaseOperationError(f"Failed to search knowledge cases: {exc}") from exc
-
-
-def create_knowledge_case(payload: dict[str, Any]):
-    if not is_supabase_configured():
-        raise SupabaseUnavailableError("Supabase is not configured.")
-
-    try:
-        response = _client().table("knowledge_cases").insert(payload).execute()
-        rows = getattr(response, "data", []) or []
-        return rows[0] if rows else None
-    except Exception as exc:
-        raise SupabaseOperationError(f"Failed to create knowledge case: {exc}") from exc
-
-
-def create_knowledge_event(payload: dict[str, Any]):
-    if not is_supabase_configured():
-        raise SupabaseUnavailableError("Supabase is not configured.")
-
-    try:
-        response = _client().table("knowledge_events").insert(payload).execute()
-        rows = getattr(response, "data", []) or []
-        return rows[0] if rows else None
-    except Exception as exc:
-        raise SupabaseOperationError(f"Failed to create knowledge event: {exc}") from exc
+        raise SupabaseOperationError("Failed to verify Supabase auth token.") from exc
