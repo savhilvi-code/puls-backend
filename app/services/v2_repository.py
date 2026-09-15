@@ -35,16 +35,12 @@ V2_PUBLIC_TABLES = (
 )
 
 
-ACTIVE_VEHICLE_STATUSES = ("ACTIVE", "active", "", None)
+ACTIVE_VEHICLE_STATUSES = ("ACTIVE",)
 
 OPEN_PROBLEM_STATUSES = (
     "OPEN",
-    "ACTIVE",
-    "INVESTIGATING",
+    "IN_PROGRESS",
     "AWAITING_CONFIRMATION",
-    "open",
-    "active",
-    "investigating",
 )
 
 
@@ -371,7 +367,7 @@ def upsert_vehicle_specs(
                 "parameter_key": str(key),
                 "parameter_name": str(key),
                 "actual_value": str(value),
-                "source_type": "user",
+                "source_type": "USER",
                 "updated_at": now_iso(),
             }
 
@@ -571,10 +567,10 @@ def save_message(
 
     payload = {
         "conversation_id": conversation_id,
-        "role": role,
+        "role": str(role or "USER").upper(),
         "content": str(text or "").strip(),
         "language": language or "en",
-        "message_type": "text",
+        "message_type": "TEXT",
         "metadata": metadata,
     }
 
@@ -979,7 +975,7 @@ def create_search_episode(
         "problem_id": problem_id,
         "status": "RUNNING",
         "current_stage": 1,
-        "trigger_type": "diagnostic_search",
+        "trigger_type": "DIAGNOSTIC",
         "search_context": {
             "reason": reason,
             "vehicle_id": (
@@ -1034,10 +1030,13 @@ def update_search_episode(
 
     data["updated_at"] = now_iso()
 
+    if data.get("status") == "INSUFFICIENT_EVIDENCE":
+        data["status"] = "COMPLETED"
+
     if data.get("status") in {
         "COMPLETED",
-        "INSUFFICIENT_EVIDENCE",
         "FAILED",
+        "CANCELED",
     }:
         data.setdefault(
             "completed_at",
@@ -1140,6 +1139,97 @@ def create_search_run(
     return saved
 
 
+SOURCE_TYPES = {
+    "MANUFACTURER",
+    "MANUAL",
+    "FORUM",
+    "WEBSITE",
+    "YOUTUBE",
+    "SOCIAL",
+    "DOCUMENT",
+    "PULS",
+    "OTHER",
+}
+
+SOURCE_STATUSES = {
+    "ACTIVE",
+    "UNAVAILABLE",
+    "REMOVED",
+    "BLOCKED",
+}
+
+SOURCE_TRUST_LEVELS = {
+    "UNKNOWN",
+    "LOW",
+    "MEDIUM",
+    "HIGH",
+    "AUTHORITATIVE",
+}
+
+
+def _normalize_source_type(
+    value: Any,
+    *,
+    url: str,
+) -> str:
+    raw = str(value or "").strip().upper()
+
+    aliases = {
+        "EXTERNAL": "WEBSITE",
+        "WEB": "WEBSITE",
+        "SITE": "WEBSITE",
+        "URL": "WEBSITE",
+        "YOUTUBE_VIDEO": "YOUTUBE",
+        "VIDEO": "YOUTUBE",
+        "SOCIAL_MEDIA": "SOCIAL",
+        "PDF": "DOCUMENT",
+        "DOC": "DOCUMENT",
+    }
+
+    raw = aliases.get(raw, raw)
+
+    if raw in SOURCE_TYPES:
+        return raw
+
+    domain = _source_domain(url)
+
+    if "youtube.com" in domain or "youtu.be" in domain:
+        return "YOUTUBE"
+
+    if any(
+        name in domain
+        for name in (
+            "facebook.com",
+            "instagram.com",
+            "tiktok.com",
+            "twitter.com",
+            "x.com",
+            "reddit.com",
+        )
+    ):
+        return "SOCIAL"
+
+    return "WEBSITE"
+
+
+def _normalize_source_status(
+    value: Any,
+) -> str:
+    raw = str(value or "ACTIVE").strip().upper()
+    return raw if raw in SOURCE_STATUSES else "ACTIVE"
+
+
+def _normalize_trust_level(
+    value: Any,
+) -> str:
+    raw = str(value or "UNKNOWN").strip().upper()
+    return (
+        raw
+        if raw in SOURCE_TRUST_LEVELS
+        else "UNKNOWN"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -1191,11 +1281,11 @@ def upsert_source(
         )
 
     payload = {
-        "source_type": str(
+        "source_type": _normalize_source_type(
             source.get("type")
-            or source.get("source_type")
-            or "external"
-        ).strip(),
+            or source.get("source_type"),
+            url=url,
+        ),
         "url": url,
         "title": str(
             source.get("title")
@@ -1210,8 +1300,12 @@ def upsert_source(
         "published_at": source.get("published_at"),
         "language": source.get("language"),
         "external_id": source.get("external_id"),
-        "trust_level": source.get("trust_level"),
-        "status": source.get("status") or "active",
+        "trust_level": _normalize_trust_level(
+            source.get("trust_level")
+        ),
+        "status": _normalize_source_status(
+            source.get("status")
+        ),
         "metadata": metadata,
         "last_checked_at": now_iso(),
         "updated_at": now_iso(),
@@ -1276,8 +1370,11 @@ def link_problem_source(
     payload = {
         "problem_id": problem_id,
         "source_id": source_id,
-        "relation_type": "diagnostic_evidence",
-        "relevance_score": relevance,
+        "relation_type": "RELEVANT",
+        "relevance_score": max(
+            0.0,
+            min(float(relevance), 1.0),
+        ),
         "extracted_evidence": summary,
         "discovered_stage": discovered_stage,
         "metadata": {
