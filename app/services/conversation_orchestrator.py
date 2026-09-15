@@ -650,13 +650,10 @@ async def process_chat_message_v2(
     # Do not create diagnostic/search artifacts.
     # ---------------------------------------------------------------
 
-    if (
-        mode in {
-            "GENERAL_CHAT",
-            "META_CHAT",
-        }
-        or is_social_general_text(text)
-    ):
+    if mode in {
+        "GENERAL_CHAT",
+        "META_CHAT",
+    }:
         fallback = _natural_fallback(
             (
                 "META"
