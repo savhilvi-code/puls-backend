@@ -24,3 +24,9 @@ npm-debug.log*
 *.zip
 cardiagnostic-ai-github/
 private_docs_local/
+chrome-profile-mobile/
+outputs/
+suslov_reconciliation/
+car-diagnostic-api/
+reconcile_suslov.py
+scripts/render_puls_promo.py
