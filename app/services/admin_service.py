@@ -14,6 +14,115 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _auth_admin():
+    client = get_supabase_client()
+    admin = getattr(client.auth, "admin", None)
+
+    if admin is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase Auth Admin API is unavailable.",
+        )
+
+    return admin
+
+
+def _extract_auth_user(response: Any) -> Any | None:
+    """
+    supabase-py Auth Admin responses can expose the user either directly
+    through .user or through a response data object depending on version.
+    """
+    if response is None:
+        return None
+
+    user = getattr(response, "user", None)
+    if user is not None:
+        return user
+
+    data = getattr(response, "data", None)
+    if data is not None:
+        user = getattr(data, "user", None)
+        if user is not None:
+            return user
+
+        if isinstance(data, dict):
+            return data.get("user")
+
+    if isinstance(response, dict):
+        return response.get("user") or response.get("data", {}).get("user")
+
+    return None
+
+
+def _auth_user_block_state(user_id: str) -> dict[str, Any]:
+    """
+    Read the real block state from Supabase Auth.
+    A user is blocked while banned_until is in the future.
+    """
+    try:
+        response = _auth_admin().get_user_by_id(user_id)
+        auth_user = _extract_auth_user(response)
+    except Exception:
+        return {
+            "blocked": False,
+            "banned_until": None,
+            "auth_status_available": False,
+        }
+
+    if auth_user is None:
+        return {
+            "blocked": False,
+            "banned_until": None,
+            "auth_status_available": False,
+        }
+
+    if isinstance(auth_user, dict):
+        banned_until = auth_user.get("banned_until")
+    else:
+        banned_until = getattr(auth_user, "banned_until", None)
+
+    blocked = False
+
+    if banned_until:
+        try:
+            value = str(banned_until).replace("Z", "+00:00")
+            banned_until_dt = datetime.fromisoformat(value)
+
+            if banned_until_dt.tzinfo is None:
+                banned_until_dt = banned_until_dt.replace(tzinfo=timezone.utc)
+
+            blocked = banned_until_dt > datetime.now(timezone.utc)
+        except (TypeError, ValueError):
+            # If Supabase reports a non-empty ban value that cannot be parsed,
+            # treat it as blocked rather than incorrectly showing the account
+            # as active.
+            blocked = True
+
+    return {
+        "blocked": blocked,
+        "banned_until": str(banned_until) if banned_until else None,
+        "auth_status_available": True,
+    }
+
+
+def _with_auth_state(user: dict[str, Any]) -> dict[str, Any]:
+    result = dict(user)
+    user_id = result.get("user_id")
+
+    if not user_id:
+        result.update(
+            {
+                "blocked": False,
+                "banned_until": None,
+                "auth_status_available": False,
+            }
+        )
+        return result
+
+    result.update(_auth_user_block_state(str(user_id)))
+    return result
+
+
 def require_admin(request: Request) -> str:
     """
     Verify Supabase Bearer token and require membership in admin_accounts.
@@ -54,7 +163,8 @@ def require_admin(request: Request) -> str:
 
 def list_users() -> list[dict[str, Any]]:
     """
-    Return users prepared by the admin_users database view.
+    Return users prepared by the admin_users database view,
+    enriched with their real Supabase Auth block state.
     """
     try:
         response = (
@@ -64,12 +174,14 @@ def list_users() -> list[dict[str, Any]]:
             .order("created_at", desc=True)
             .execute()
         )
-        return rows(response)
+        users = rows(response)
     except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail="Failed to load users.",
         ) from exc
+
+    return [_with_auth_state(user) for user in users]
 
 
 def get_admin_user(user_id: str) -> dict[str, Any]:
@@ -95,7 +207,7 @@ def get_admin_user(user_id: str) -> dict[str, Any]:
             detail="User not found.",
         )
 
-    return found[0]
+    return _with_auth_state(found[0])
 
 
 def reset_user_quota(user_id: str) -> dict[str, Any]:
@@ -192,19 +304,6 @@ def change_user_plan(user_id: str, plan: str) -> dict[str, Any]:
         "quota_used": 0,
         "remaining": quota_limit,
     }
-
-
-def _auth_admin():
-    client = get_supabase_client()
-    admin = getattr(client.auth, "admin", None)
-
-    if admin is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Supabase Auth Admin API is unavailable.",
-        )
-
-    return admin
 
 
 def block_user(user_id: str) -> dict[str, Any]:
@@ -309,9 +408,6 @@ def delete_user_permanently(
     try:
         _auth_admin().delete_user(user_id)
     except Exception as exc:
-        # At this point the PULS data transaction has already succeeded.
-        # Report the Auth failure explicitly instead of pretending that
-        # the complete account deletion succeeded.
         raise HTTPException(
             status_code=503,
             detail=(
