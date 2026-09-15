@@ -501,11 +501,11 @@ def get_or_create_conversation(
         "vehicle_id": vehicle_id,
         "problem_id": problem_id,
         "conversation_type": (
-            "diagnostic"
+            "DIAGNOSTIC"
             if vehicle_id or problem_id
-            else "general"
+            else "GENERAL"
         ),
-        "status": "active",
+        "status": "ACTIVE",
         "context": {
             "initial_text": str(title or "")[:500],
         },
