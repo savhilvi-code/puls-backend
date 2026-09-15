@@ -621,7 +621,7 @@ def recent_conversation_messages(
             client.table("conversations")
             .select("id")
             .eq("user_id", user_id)
-            .eq("status", "active")
+            .eq("status", "ACTIVE")
             .order("updated_at", desc=True)
             .limit(1)
             .execute()
