@@ -251,26 +251,79 @@ def list_problems(
 ) -> list[dict[str, Any]]:
     if user_id is None:
         return []
-    query = get_supabase_client().table("problems").select("*").eq("user_id", user_id)
+
+    vehicles_response = (
+        get_supabase_client()
+        .table("vehicles")
+        .select("id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    vehicle_ids = [row["id"] for row in rows(vehicles_response)]
+
+    if not vehicle_ids:
+        return []
+
     if vehicle_id is not None:
-        query = query.eq("vehicle_id", vehicle_id)
+        if str(vehicle_id) not in {str(v_id) for v_id in vehicle_ids}:
+            return []
+        vehicle_ids = [vehicle_id]
+
+    query = (
+        get_supabase_client()
+        .table("problems")
+        .select("*")
+        .in_("vehicle_id", vehicle_ids)
+    )
+
     if statuses:
         query = query.in_("status", list(statuses))
-    return rows(query.order("updated_at", desc=True).limit(limit).execute())
+
+    return rows(
+        query.order("updated_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
 
 
-def get_problem(*, user_id: Uuid | None, problem_id: Uuid | None) -> dict[str, Any] | None:
+def get_problem(
+    *,
+    user_id: Uuid | None,
+    problem_id: Uuid | None,
+) -> dict[str, Any] | None:
     if user_id is None or problem_id is None:
         return None
-    return _one(
+
+    problem = _one(
         get_supabase_client()
         .table("problems")
         .select("*")
         .eq("id", problem_id)
+        .limit(1)
+        .execute()
+    )
+
+    if problem is None:
+        return None
+
+    vehicle_id = problem.get("vehicle_id")
+    if not vehicle_id:
+        return None
+
+    vehicle = _one(
+        get_supabase_client()
+        .table("vehicles")
+        .select("id")
+        .eq("id", vehicle_id)
         .eq("user_id", user_id)
         .limit(1)
         .execute()
     )
+
+    if vehicle is None:
+        return None
+
+    return problem
 
 
 def save_problem(*, user_id: Uuid | None, vehicle_id: Uuid | None, payload: dict[str, Any], problem_id: Uuid | None = None) -> dict[str, Any] | None:
