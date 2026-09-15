@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pathlib import Path
 
+from app.routers.admin import router as admin_router
 from app.routers.chat import router as chat_router
 from app.routers.history import router as history_router
 from app.routers.health import router as health_router
@@ -35,3 +36,4 @@ app.include_router(search_router)
 app.include_router(history_router)
 app.include_router(vehicles_router)
 app.include_router(problems_router)
+app.include_router(admin_router)
