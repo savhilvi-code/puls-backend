@@ -6,21 +6,26 @@ from unittest.mock import AsyncMock, patch
 
 from app.services import conversation_orchestrator as core
 
+USER_ID = "11111111-1111-4111-8111-111111111111"
+VEHICLE_ID = "22222222-2222-4222-8222-222222222222"
+PROBLEM_ID = "33333333-3333-4333-8333-333333333333"
+CONVERSATION_ID = "44444444-4444-4444-8444-444444444444"
+
 
 def _user():
-    return SimpleNamespace(id=1, auth_user_id="auth-a", email="a@example.com", language="en")
+    return SimpleNamespace(id=USER_ID, email="a@example.com", language="en")
 
 
 def _sub():
-    return {"id": 9, "user_id": 1, "quota_limit": 10, "quota_used": 2, "plan": "free"}
+    return {"id": "sub-a", "user_id": USER_ID, "quota_limit": 10, "quota_used": 2, "plan": "free"}
 
 
-def _vehicle(vehicle_id=10, brand="Nissan"):
-    return {"id": vehicle_id, "user_id": 1, "brand": brand, "model": "X-Trail", "year": 2003, "engine": "SR20VET"}
+def _vehicle(vehicle_id=VEHICLE_ID, brand="Nissan"):
+    return {"id": vehicle_id, "user_id": USER_ID, "brand": brand, "model": "X-Trail", "year": 2003, "engine": "SR20VET"}
 
 
-def _problem(problem_id=20):
-    return {"id": problem_id, "user_id": 1, "vehicle_id": 10, "title": "Misfire", "problem_class": "MISFIRE", "status": "OPEN"}
+def _problem(problem_id=PROBLEM_ID):
+    return {"id": problem_id, "user_id": USER_ID, "vehicle_id": VEHICLE_ID, "title": "Misfire", "problem_class": "MISFIRE", "status": "OPEN"}
 
 
 class BackendV2ConversationTests(unittest.TestCase):
@@ -33,7 +38,7 @@ class BackendV2ConversationTests(unittest.TestCase):
             "vehicles": stack.enter_context(patch.object(core.repo, "list_user_vehicles", return_value=vehicles if vehicles is not None else [])),
             "latest_problem": stack.enter_context(patch.object(core, "_latest_problem_for_context", return_value=latest_problem)),
             "resolve_problem": stack.enter_context(patch.object(core, "resolve_relevant_problem", return_value=problem)),
-            "conversation": stack.enter_context(patch.object(core.repo, "get_or_create_conversation", return_value={"id": 30})),
+            "conversation": stack.enter_context(patch.object(core.repo, "get_or_create_conversation", return_value={"id": CONVERSATION_ID})),
             "save_message": stack.enter_context(patch.object(core.repo, "save_message")),
             "save_problem": stack.enter_context(patch.object(core.repo, "save_problem", return_value=problem or _problem())),
             "event": stack.enter_context(patch.object(core.repo, "create_vehicle_event")),
@@ -65,7 +70,7 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIsNone(saved_messages[0].kwargs["problem_id"])
 
     def test_ambiguous_vehicle_asks_one_question_before_research(self):
-        response, mocks = self._run_chat("I hear a strange noise", vehicles=[_vehicle(10, "Nissan"), _vehicle(11, "Toyota")])
+        response, mocks = self._run_chat("I hear a strange noise", vehicles=[_vehicle(VEHICLE_ID, "Nissan"), _vehicle("55555555-5555-4555-8555-555555555555", "Toyota")])
 
         self.assertIn("Which vehicle", response.answer)
         mocks["research"].assert_not_called()
@@ -91,13 +96,14 @@ class BackendV2ConversationTests(unittest.TestCase):
         mocks["research"].assert_not_called()
 
     def test_diagnostic_reuses_existing_problem_and_runs_staged_research(self):
-        existing = _problem(55)
+        existing_problem_id = "66666666-6666-4666-8666-666666666666"
+        existing = _problem(existing_problem_id)
         response, mocks = self._run_chat("Nissan X-Trail P0300 misfires when cold", vehicles=[_vehicle()], problem=existing)
 
         self.assertIn("evidence summary", response.answer)
         mocks["research"].assert_called_once()
-        self.assertEqual(mocks["research"].call_args.kwargs["problem_id"], 55)
-        self.assertEqual(mocks["save_problem"].call_args.kwargs["problem_id"], 55)
+        self.assertEqual(mocks["research"].call_args.kwargs["problem_id"], existing_problem_id)
+        self.assertEqual(mocks["save_problem"].call_args.kwargs["problem_id"], existing_problem_id)
 
 
 if __name__ == "__main__":

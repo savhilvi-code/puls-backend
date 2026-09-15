@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -32,6 +33,13 @@ class VehiclePayload(BaseModel):
     country: str = ""
     city: str = ""
     notes: str = ""
+    displacement: str = ""
+    power: str = ""
+    torque: str = ""
+    engine_type: str = ""
+    cylinders: str = ""
+    emissions: str = ""
+    tank: str = ""
 
 
 def _safe_int(value: int | str | None) -> int | None:
@@ -59,6 +67,18 @@ def _payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
         "country": payload.country.strip(),
         "city": payload.city.strip(),
         "notes": payload.notes.strip(),
+    }
+
+
+def _specs_payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
+    return {
+        "displacement": payload.displacement.strip(),
+        "power": payload.power.strip(),
+        "torque": payload.torque.strip(),
+        "engine_type": payload.engine_type.strip(),
+        "cylinders": payload.cylinders.strip(),
+        "emissions": payload.emissions.strip(),
+        "tank": payload.tank.strip(),
     }
 
 
@@ -105,12 +125,13 @@ async def get_vehicles(request: Request, include_trashed: bool = False) -> dict[
 
 
 @router.get("/{vehicle_id}")
-async def get_vehicle(vehicle_id: int, request: Request) -> dict[str, Any]:
+async def get_vehicle(vehicle_id: UUID, request: Request) -> dict[str, Any]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    row = repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_id)
+    vehicle_uuid = str(vehicle_id)
+    row = repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_uuid)
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle not found.")
-    return {"vehicle": _vehicle_response(row), "specs": repo.get_vehicle_specs(user_id=user.id, vehicle_id=vehicle_id)}
+    return {"vehicle": _vehicle_response(row), "specs": repo.get_vehicle_specs(user_id=user.id, vehicle_id=vehicle_uuid)}
 
 
 @router.post("")
@@ -121,6 +142,7 @@ async def create_vehicle(payload: VehiclePayload, request: Request) -> dict[str,
     row = repo.save_vehicle(user_id=user.id, payload=_payload_to_db(payload))
     if not row:
         raise HTTPException(status_code=500, detail="Vehicle was not saved.")
+    repo.upsert_vehicle_specs(user_id=user.id, vehicle_id=row.get("id"), payload=_specs_payload_to_db(payload))
     return {"vehicle": _vehicle_response(row)}
 
 
@@ -130,27 +152,28 @@ async def enrich_vehicle(payload: VehiclePayload) -> dict[str, Any]:
 
 
 @router.put("/{vehicle_id}")
-async def update_vehicle(vehicle_id: int, payload: VehiclePayload, request: Request) -> dict[str, Any]:
+async def update_vehicle(vehicle_id: UUID, payload: VehiclePayload, request: Request) -> dict[str, Any]:
     user = await get_or_create_profile(request=request, payload=payload.model_dump(), require_auth=True)
-    row = repo.save_vehicle(user_id=user.id, vehicle_id=vehicle_id, payload=_payload_to_db(payload))
+    row = repo.save_vehicle(user_id=user.id, vehicle_id=str(vehicle_id), payload=_payload_to_db(payload))
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle not found.")
+    repo.upsert_vehicle_specs(user_id=user.id, vehicle_id=row.get("id"), payload=_specs_payload_to_db(payload))
     return {"vehicle": _vehicle_response(row)}
 
 
 @router.delete("/{vehicle_id}")
-async def remove_vehicle(vehicle_id: int, request: Request) -> dict[str, bool]:
+async def remove_vehicle(vehicle_id: UUID, request: Request) -> dict[str, bool]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    deleted = repo.soft_delete_vehicle(user_id=user.id, vehicle_id=vehicle_id)
+    deleted = repo.soft_delete_vehicle(user_id=user.id, vehicle_id=str(vehicle_id))
     if not deleted:
         raise HTTPException(status_code=404, detail="Vehicle not found.")
     return {"deleted": True}
 
 
 @router.post("/{vehicle_id}/restore")
-async def restore_vehicle(vehicle_id: int, request: Request) -> dict[str, Any]:
+async def restore_vehicle(vehicle_id: UUID, request: Request) -> dict[str, Any]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    row = repo.restore_vehicle(user_id=user.id, vehicle_id=vehicle_id)
+    row = repo.restore_vehicle(user_id=user.id, vehicle_id=str(vehicle_id))
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle not found or not restorable.")
     return {"vehicle": _vehicle_response(row)}

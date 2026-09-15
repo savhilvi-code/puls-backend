@@ -1,8 +1,12 @@
 import unittest
+import asyncio
 from unittest.mock import patch
 
 from app.database import supabase
 from app.main import app
+from app.services import auth_service
+
+USER_ID = "11111111-1111-4111-8111-111111111111"
 
 
 class SecurityV2Tests(unittest.TestCase):
@@ -37,6 +41,26 @@ class SecurityV2Tests(unittest.TestCase):
         forbidden = {"admin_set_user_limit", "admin_purge_user", "admin_users"}
         exposed = [route.path for route in app.routes if any(term in route.path for term in forbidden)]
         self.assertEqual(exposed, [])
+
+    def test_verified_jwt_user_id_maps_to_public_user_id(self):
+        existing = auth_service.UserRecord(id=USER_ID, email="a@example.com")
+        with patch.object(auth_service, "_bearer_token", return_value="jwt"), \
+            patch.object(auth_service, "get_auth_user_from_bearer", return_value={"id": USER_ID, "email": "a@example.com"}), \
+            patch.object(auth_service, "find_user_by_id", return_value=existing) as find_user, \
+            patch.object(auth_service, "ensure_user_subscription"):
+            user = asyncio.run(auth_service.get_or_create_profile(request=object(), payload={"user_id": "attacker"}, require_auth=True))
+
+        self.assertEqual(user.id, USER_ID)
+        find_user.assert_called_once_with(USER_ID)
+
+    def test_authenticated_profile_failure_does_not_become_transient(self):
+        with patch.object(auth_service, "_bearer_token", return_value="jwt"), \
+            patch.object(auth_service, "get_auth_user_from_bearer", return_value={"id": USER_ID, "email": "a@example.com"}), \
+            patch.object(auth_service, "find_user_by_id", side_effect=supabase.SupabaseOperationError("profile failed")):
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(auth_service.get_or_create_profile(request=object(), payload={}, require_auth=True))
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 503)
 
 
 if __name__ == "__main__":

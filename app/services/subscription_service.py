@@ -47,7 +47,7 @@ def _normalize_subscription(row: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def get_active_subscription(*, user_id: int | None) -> dict[str, Any] | None:
+def get_active_subscription(*, user_id: str | None) -> dict[str, Any] | None:
     if user_id is None:
         return None
     response = (
@@ -69,7 +69,7 @@ def get_active_subscription(*, user_id: int | None) -> dict[str, Any] | None:
     return _normalize_subscription(found[0])
 
 
-def ensure_user_subscription(*, user_id: int | None) -> dict[str, Any] | None:
+def ensure_user_subscription(*, user_id: str | None) -> dict[str, Any] | None:
     if user_id is None:
         return None
     existing = get_active_subscription(user_id=user_id)
@@ -91,14 +91,14 @@ def ensure_user_subscription(*, user_id: int | None) -> dict[str, Any] | None:
     return _normalize_subscription(found[0] if found else payload)
 
 
-def can_run_research(*, user_id: int | None) -> tuple[bool, dict[str, Any] | None]:
+def can_run_research(*, user_id: str | None) -> tuple[bool, dict[str, Any] | None]:
     subscription = ensure_user_subscription(user_id=user_id)
     if not subscription:
         return False, None
     return bool(subscription["remaining"] > 0), subscription
 
 
-def consume_research_credit(*, user_id: int | None) -> dict[str, Any] | None:
+def consume_research_credit(*, user_id: str | None) -> dict[str, Any] | None:
     subscription = ensure_user_subscription(user_id=user_id)
     if not subscription or subscription["id"] is None:
         return subscription

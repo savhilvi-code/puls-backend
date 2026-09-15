@@ -19,8 +19,8 @@ async def update_user_after_response(
     answer: str,
     should_decrease_limit: bool,
     *,
-    vehicle_id: int | None = None,
-    problem_id: int | None = None,
+    vehicle_id: str | None = None,
+    problem_id: str | None = None,
     message_type: str = "general",
     **_: Any,
 ) -> None:

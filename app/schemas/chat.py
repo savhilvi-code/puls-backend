@@ -7,14 +7,10 @@ class NormalizedInput(BaseModel):
 
     source: str = "web"
     text: str = ""
-    auth_user_id: str = ""
-    email: str = ""
-    username: str = ""
-    first_name: str = ""
     language: str = "en"
-    conversation_id: int | None = None
-    vehicle_id: int | None = None
-    problem_id: int | None = None
+    conversation_id: str | None = None
+    vehicle_id: str | None = None
+    problem_id: str | None = None
 
 
 class ChatRequest(NormalizedInput):

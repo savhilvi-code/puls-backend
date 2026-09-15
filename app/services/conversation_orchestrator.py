@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import Request
 
@@ -44,7 +45,7 @@ def _vehicle_match_score(vehicle: dict[str, Any], car_text: str) -> int:
 def resolve_relevant_vehicle(
     *,
     vehicles: list[dict[str, Any]],
-    explicit_vehicle_id: int | None,
+    explicit_vehicle_id: str | None,
     user_text: str,
     latest_problem: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, bool]:
@@ -88,9 +89,9 @@ def _problem_similarity(problem: dict[str, Any], *, problem_class: str, symptom:
 
 def resolve_relevant_problem(
     *,
-    user_id: int | None,
-    vehicle_id: int | None,
-    explicit_problem_id: int | None,
+    user_id: str | None,
+    vehicle_id: str | None,
+    explicit_problem_id: str | None,
     problem_class: str,
     symptom: str,
 ) -> dict[str, Any] | None:
@@ -105,7 +106,7 @@ def resolve_relevant_problem(
     return candidates[0] if symptom_has_operating_detail(symptom) and len(candidates) == 1 else None
 
 
-def _latest_problem_for_context(*, user_id: int | None) -> dict[str, Any] | None:
+def _latest_problem_for_context(*, user_id: str | None) -> dict[str, Any] | None:
     problems = repo.list_problems(user_id=user_id, statuses=repo.OPEN_PROBLEM_STATUSES, limit=1)
     return problems[0] if problems else None
 
@@ -173,25 +174,32 @@ def _problem_payload(*, symptom: str, problem_class: str, vehicle: dict[str, Any
     }
 
 
+def _valid_uuid(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _has_bearer(request: Request | None) -> bool:
+    header = str(request.headers.get("authorization") or "").strip() if request is not None else ""
+    return header.lower().startswith("bearer ")
+
+
 async def process_chat_message_v2(payload: dict[str, Any], source: str = "web", request: Request | None = None) -> ChatResponse:
     text = str(payload.get("message") or payload.get("text") or "").strip()
     language = str(payload.get("language") or "en")
-    user = await get_or_create_profile(request=request, payload={**payload, "language": language}, require_auth=False)
+    user = await get_or_create_profile(request=request, payload={**payload, "language": language}, require_auth=_has_bearer(request))
     subscription = ensure_user_subscription(user_id=user.id) if user.id is not None else None
-    recent_messages = repo.recent_conversation_messages(user_id=user.id, conversation_id=payload.get("conversation_id"))
+    conversation_id = _valid_uuid(payload.get("conversation_id"))
+    recent_messages = repo.recent_conversation_messages(user_id=user.id, conversation_id=conversation_id)
 
     latest_problem = _latest_problem_for_context(user_id=user.id)
     vehicles = repo.list_user_vehicles(user_id=user.id)
-    explicit_vehicle_id = payload.get("vehicle_id")
-    explicit_problem_id = payload.get("problem_id")
-    try:
-        explicit_vehicle_id = int(explicit_vehicle_id) if explicit_vehicle_id not in (None, "") else None
-    except (TypeError, ValueError):
-        explicit_vehicle_id = None
-    try:
-        explicit_problem_id = int(explicit_problem_id) if explicit_problem_id not in (None, "") else None
-    except (TypeError, ValueError):
-        explicit_problem_id = None
+    explicit_vehicle_id = _valid_uuid(payload.get("vehicle_id"))
+    explicit_problem_id = _valid_uuid(payload.get("problem_id"))
 
     if not text:
         return ChatResponse(answer="", links=[], quota=quota_payload(subscription))
@@ -222,7 +230,7 @@ async def process_chat_message_v2(payload: dict[str, Any], source: str = "web", 
         vehicle_id=(vehicle or {}).get("id"),
         problem_id=(problem or {}).get("id"),
         title=text,
-        conversation_id=payload.get("conversation_id"),
+        conversation_id=conversation_id,
     )
     conversation_id = (conversation or {}).get("id")
 

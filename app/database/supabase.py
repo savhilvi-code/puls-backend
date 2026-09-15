@@ -99,8 +99,7 @@ def rows(response) -> list[dict[str, Any]]:
 
 def _map_user_row(row: dict[str, Any]) -> UserRecord:
     return UserRecord(
-        id=row.get("id"),
-        auth_user_id=str(row.get("auth_user_id") or ""),
+        id=str(row.get("id") or "") or None,
         email=str(row.get("email") or ""),
         username=str(row.get("name") or row.get("full_name") or ""),
         first_name="",
@@ -108,33 +107,22 @@ def _map_user_row(row: dict[str, Any]) -> UserRecord:
     )
 
 
-def find_user_by_fields(*, auth_user_id: str = "", email: str = "") -> UserRecord | None:
+def find_user_by_id(user_id: str) -> UserRecord | None:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
 
-    filters = []
-    if auth_user_id:
-        filters.append(("auth_user_id", auth_user_id))
-    if email:
-        filters.append(("email", email))
-    if not filters:
+    user_id = str(user_id or "").strip()
+    if not user_id:
         return None
-
-    last_error: Exception | None = None
-    for column, value in filters:
-        try:
-            response = get_supabase_client().table("users").select("*").eq(column, value).limit(1).execute()
-            found = rows(response)
-            if found:
-                return _map_user_row(found[0])
-        except Exception as exc:
-            last_error = exc
-    if last_error is not None:
-        raise SupabaseOperationError("Failed to find user profile.") from last_error
-    return None
+    try:
+        response = get_supabase_client().table("users").select("*").eq("id", user_id).limit(1).execute()
+        found = rows(response)
+        return _map_user_row(found[0]) if found else None
+    except Exception as exc:
+        raise SupabaseOperationError("Failed to find user profile.") from exc
 
 
-def get_user_by_id(user_id: int) -> UserRecord | None:
+def get_user_by_id(user_id: str) -> UserRecord | None:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
     try:
@@ -160,7 +148,7 @@ def create_user_record(payload: dict[str, Any]) -> UserRecord:
         raise SupabaseOperationError("Failed to create user profile.") from exc
 
 
-def update_user_record(user_id: int, payload: dict[str, Any]) -> UserRecord | None:
+def update_user_record(user_id: str, payload: dict[str, Any]) -> UserRecord | None:
     if not is_supabase_configured():
         raise SupabaseUnavailableError("Supabase is not configured.")
     try:
@@ -180,8 +168,9 @@ def get_auth_user_from_bearer(token: str) -> dict[str, str]:
         if auth_user is None:
             return {}
         return {
-            "auth_user_id": str(getattr(auth_user, "id", "") or ""),
+            "id": str(getattr(auth_user, "id", "") or ""),
             "email": str(getattr(auth_user, "email", "") or ""),
+            "name": str((getattr(auth_user, "user_metadata", None) or {}).get("full_name") or ""),
         }
     except Exception as exc:
         raise SupabaseOperationError("Failed to verify Supabase auth token.") from exc

@@ -10,7 +10,7 @@ from app.database.supabase import (
     SupabaseOperationError,
     SupabaseUnavailableError,
     create_user_record,
-    find_user_by_fields,
+    find_user_by_id,
     get_auth_user_from_bearer,
 )
 from app.schemas.user import UserRecord
@@ -19,7 +19,7 @@ from app.services.subscription_service import ensure_user_subscription
 
 @dataclass(frozen=True)
 class AuthIdentity:
-    auth_user_id: str = ""
+    user_id: str = ""
     email: str = ""
     name: str = ""
     is_verified: bool = False
@@ -42,20 +42,18 @@ def resolve_identity(request: Request | None = None, payload: dict[str, Any] | N
     token = _bearer_token(request)
     if token:
         verified = get_auth_user_from_bearer(token)
+        if not verified.get("id"):
+            raise HTTPException(status_code=401, detail="Invalid authentication token.")
         return AuthIdentity(
-            auth_user_id=verified.get("auth_user_id", ""),
+            user_id=verified.get("id", ""),
             email=verified.get("email", ""),
+            name=verified.get("name", ""),
             is_verified=True,
         )
 
     payload = payload or {}
     if _dev_identity_allowed():
-        return AuthIdentity(
-            auth_user_id=str(payload.get("auth_user_id") or "").strip(),
-            email=str(payload.get("email") or "").strip().lower(),
-            name=str(payload.get("username") or payload.get("first_name") or "").strip(),
-            is_verified=False,
-        )
+        return AuthIdentity(is_verified=False)
     return AuthIdentity()
 
 
@@ -63,7 +61,6 @@ def transient_user(identity: AuthIdentity | None = None, *, language: str = "en"
     identity = identity or AuthIdentity()
     return UserRecord(
         id=None,
-        auth_user_id=identity.auth_user_id,
         email=identity.email,
         username=identity.name,
         language=language or "en",
@@ -79,20 +76,20 @@ async def get_or_create_profile(
     payload = payload or {}
     identity = resolve_identity(request, payload)
     language = str(payload.get("language") or "en")
-    if not identity.auth_user_id and not identity.email:
+    if not identity.user_id:
         if require_auth:
             raise HTTPException(status_code=401, detail="Authentication required.")
         return transient_user(identity, language=language)
 
     try:
-        existing = find_user_by_fields(auth_user_id=identity.auth_user_id, email=identity.email)
+        existing = find_user_by_id(identity.user_id)
         if existing is not None:
             ensure_user_subscription(user_id=existing.id)
             return existing
 
         created = create_user_record(
             {
-                "auth_user_id": identity.auth_user_id or None,
+                "id": identity.user_id,
                 "email": identity.email or None,
                 "name": identity.name,
                 "language": language,

@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlunparse
 
-from app.database.supabase import get_supabase_client, rows
+from app.database.supabase import SupabaseOperationError, get_supabase_client, rows
 
+Uuid = str
 
 V2_PUBLIC_TABLES = (
     "users",
@@ -63,7 +64,7 @@ def _one(response) -> dict[str, Any] | None:
     return found[0] if found else None
 
 
-def list_user_vehicles(*, user_id: int | None, include_trashed: bool = False) -> list[dict[str, Any]]:
+def list_user_vehicles(*, user_id: Uuid | None, include_trashed: bool = False) -> list[dict[str, Any]]:
     if user_id is None:
         return []
     query = get_supabase_client().table("vehicles").select("*").eq("user_id", user_id)
@@ -72,7 +73,7 @@ def list_user_vehicles(*, user_id: int | None, include_trashed: bool = False) ->
     return rows(query.order("updated_at", desc=True).limit(100).execute())
 
 
-def get_vehicle(*, user_id: int | None, vehicle_id: int | None, include_trashed: bool = False) -> dict[str, Any] | None:
+def get_vehicle(*, user_id: Uuid | None, vehicle_id: Uuid | None, include_trashed: bool = False) -> dict[str, Any] | None:
     if user_id is None or vehicle_id is None:
         return None
     query = get_supabase_client().table("vehicles").select("*").eq("user_id", user_id).eq("id", vehicle_id).limit(1)
@@ -81,7 +82,7 @@ def get_vehicle(*, user_id: int | None, vehicle_id: int | None, include_trashed:
     return _one(query.execute())
 
 
-def save_vehicle(*, user_id: int | None, payload: dict[str, Any], vehicle_id: int | None = None) -> dict[str, Any] | None:
+def save_vehicle(*, user_id: Uuid | None, payload: dict[str, Any], vehicle_id: Uuid | None = None) -> dict[str, Any] | None:
     if user_id is None:
         return None
     data = _clean_payload({**payload, "user_id": user_id, "updated_at": now_iso()})
@@ -94,7 +95,7 @@ def save_vehicle(*, user_id: int | None, payload: dict[str, Any], vehicle_id: in
     return _one(response)
 
 
-def soft_delete_vehicle(*, user_id: int | None, vehicle_id: int | None, retention_days: int = 30) -> bool:
+def soft_delete_vehicle(*, user_id: Uuid | None, vehicle_id: Uuid | None, retention_days: int = 30) -> bool:
     if user_id is None or vehicle_id is None:
         return False
     now = datetime.now(timezone.utc)
@@ -108,7 +109,7 @@ def soft_delete_vehicle(*, user_id: int | None, vehicle_id: int | None, retentio
     return bool(rows(response))
 
 
-def restore_vehicle(*, user_id: int | None, vehicle_id: int | None) -> dict[str, Any] | None:
+def restore_vehicle(*, user_id: Uuid | None, vehicle_id: Uuid | None) -> dict[str, Any] | None:
     if user_id is None or vehicle_id is None:
         return None
     payload = {"lifecycle_status": "ACTIVE", "trashed_at": None, "restore_until": None, "updated_at": now_iso()}
@@ -124,7 +125,7 @@ def restore_vehicle(*, user_id: int | None, vehicle_id: int | None) -> dict[str,
     return _one(response)
 
 
-def get_vehicle_specs(*, user_id: int | None, vehicle_id: int | None) -> dict[str, Any] | None:
+def get_vehicle_specs(*, user_id: Uuid | None, vehicle_id: Uuid | None) -> dict[str, Any] | None:
     vehicle = get_vehicle(user_id=user_id, vehicle_id=vehicle_id)
     if not vehicle:
         return None
@@ -132,7 +133,7 @@ def get_vehicle_specs(*, user_id: int | None, vehicle_id: int | None) -> dict[st
     return _one(response)
 
 
-def upsert_vehicle_specs(*, user_id: int | None, vehicle_id: int | None, payload: dict[str, Any]) -> dict[str, Any] | None:
+def upsert_vehicle_specs(*, user_id: Uuid | None, vehicle_id: Uuid | None, payload: dict[str, Any]) -> dict[str, Any] | None:
     if not get_vehicle(user_id=user_id, vehicle_id=vehicle_id):
         return None
     client = get_supabase_client()
@@ -147,11 +148,11 @@ def upsert_vehicle_specs(*, user_id: int | None, vehicle_id: int | None, payload
 
 def get_or_create_conversation(
     *,
-    user_id: int | None,
-    vehicle_id: int | None = None,
-    problem_id: int | None = None,
+    user_id: Uuid | None,
+    vehicle_id: Uuid | None = None,
+    problem_id: Uuid | None = None,
     title: str = "",
-    conversation_id: int | None = None,
+    conversation_id: Uuid | None = None,
 ) -> dict[str, Any] | None:
     if user_id is None:
         return None
@@ -179,17 +180,20 @@ def get_or_create_conversation(
         "updated_at": now_iso(),
     }
     response = client.table("conversations").insert(_clean_payload(payload)).execute()
-    return _one(response)
+    created = _one(response)
+    if created is None:
+        raise SupabaseOperationError("Conversation was not persisted.")
+    return created
 
 
 def save_message(
     *,
-    user_id: int | None,
-    conversation_id: int | None,
+    user_id: Uuid | None,
+    conversation_id: Uuid | None,
     role: str,
     text: str,
-    vehicle_id: int | None = None,
-    problem_id: int | None = None,
+    vehicle_id: Uuid | None = None,
+    problem_id: Uuid | None = None,
     language: str = "en",
 ) -> dict[str, Any] | None:
     if user_id is None or conversation_id is None or not str(text or "").strip():
@@ -203,10 +207,13 @@ def save_message(
         "message_text": str(text or "").strip(),
         "language": language or "en",
     }
-    return _one(get_supabase_client().table("messages").insert(_clean_payload(payload)).execute())
+    saved = _one(get_supabase_client().table("messages").insert(_clean_payload(payload)).execute())
+    if saved is None:
+        raise SupabaseOperationError("Message was not persisted.")
+    return saved
 
 
-def recent_conversation_messages(*, user_id: int | None, conversation_id: int | None = None, limit: int = 12) -> list[dict[str, Any]]:
+def recent_conversation_messages(*, user_id: Uuid | None, conversation_id: Uuid | None = None, limit: int = 12) -> list[dict[str, Any]]:
     if user_id is None:
         return []
     client = get_supabase_client()
@@ -237,8 +244,8 @@ def recent_conversation_messages(*, user_id: int | None, conversation_id: int | 
 
 def list_problems(
     *,
-    user_id: int | None,
-    vehicle_id: int | None = None,
+    user_id: Uuid | None,
+    vehicle_id: Uuid | None = None,
     statuses: tuple[str, ...] | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
@@ -252,7 +259,7 @@ def list_problems(
     return rows(query.order("updated_at", desc=True).limit(limit).execute())
 
 
-def get_problem(*, user_id: int | None, problem_id: int | None) -> dict[str, Any] | None:
+def get_problem(*, user_id: Uuid | None, problem_id: Uuid | None) -> dict[str, Any] | None:
     if user_id is None or problem_id is None:
         return None
     return _one(
@@ -266,7 +273,7 @@ def get_problem(*, user_id: int | None, problem_id: int | None) -> dict[str, Any
     )
 
 
-def save_problem(*, user_id: int | None, vehicle_id: int | None, payload: dict[str, Any], problem_id: int | None = None) -> dict[str, Any] | None:
+def save_problem(*, user_id: Uuid | None, vehicle_id: Uuid | None, payload: dict[str, Any], problem_id: Uuid | None = None) -> dict[str, Any] | None:
     if user_id is None or vehicle_id is None:
         return None
     base = {
@@ -286,7 +293,7 @@ def save_problem(*, user_id: int | None, vehicle_id: int | None, payload: dict[s
     return _one(response)
 
 
-def list_vehicle_events(*, user_id: int | None, vehicle_id: int | None, problem_id: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
+def list_vehicle_events(*, user_id: Uuid | None, vehicle_id: Uuid | None, problem_id: Uuid | None = None, limit: int = 100) -> list[dict[str, Any]]:
     if user_id is None or vehicle_id is None:
         return []
     query = get_supabase_client().table("vehicle_events").select("*").eq("user_id", user_id).eq("vehicle_id", vehicle_id)
@@ -295,7 +302,7 @@ def list_vehicle_events(*, user_id: int | None, vehicle_id: int | None, problem_
     return rows(query.order("occurred_at", desc=True).limit(limit).execute())
 
 
-def create_vehicle_event(*, user_id: int | None, vehicle_id: int | None, problem_id: int | None, payload: dict[str, Any]) -> dict[str, Any] | None:
+def create_vehicle_event(*, user_id: Uuid | None, vehicle_id: Uuid | None, problem_id: Uuid | None, payload: dict[str, Any]) -> dict[str, Any] | None:
     if user_id is None or vehicle_id is None:
         return None
     data = {
@@ -308,7 +315,7 @@ def create_vehicle_event(*, user_id: int | None, vehicle_id: int | None, problem
     return _one(get_supabase_client().table("vehicle_events").insert(_clean_payload(data)).execute())
 
 
-def create_search_episode(*, user_id: int | None, vehicle_id: int | None, problem_id: int | None, reason: str) -> dict[str, Any] | None:
+def create_search_episode(*, user_id: Uuid | None, vehicle_id: Uuid | None, problem_id: Uuid | None, reason: str) -> dict[str, Any] | None:
     if user_id is None or problem_id is None:
         return None
     payload = {
@@ -323,7 +330,7 @@ def create_search_episode(*, user_id: int | None, vehicle_id: int | None, proble
     return _one(get_supabase_client().table("search_episodes").insert(_clean_payload(payload)).execute())
 
 
-def update_search_episode(*, user_id: int | None, episode_id: int | None, payload: dict[str, Any]) -> dict[str, Any] | None:
+def update_search_episode(*, user_id: Uuid | None, episode_id: Uuid | None, payload: dict[str, Any]) -> dict[str, Any] | None:
     if user_id is None or episode_id is None:
         return None
     data = {**payload, "updated_at": now_iso()}
@@ -337,7 +344,7 @@ def update_search_episode(*, user_id: int | None, episode_id: int | None, payloa
     )
 
 
-def create_search_run(*, user_id: int | None, episode_id: int | None, payload: dict[str, Any]) -> dict[str, Any] | None:
+def create_search_run(*, user_id: Uuid | None, episode_id: Uuid | None, payload: dict[str, Any]) -> dict[str, Any] | None:
     if user_id is None or episode_id is None:
         return None
     data = {**payload, "user_id": user_id, "search_episode_id": episode_id, "created_at": now_iso()}
@@ -365,10 +372,10 @@ def upsert_source(source: dict[str, Any]) -> dict[str, Any] | None:
 
 def link_problem_source(
     *,
-    user_id: int | None,
-    problem_id: int | None,
+    user_id: Uuid | None,
+    problem_id: Uuid | None,
     source_id: int | None,
-    search_run_id: int | None,
+    search_run_id: Uuid | None,
     summary: str,
     relevance: float = 0.5,
 ) -> dict[str, Any] | None:
@@ -399,7 +406,7 @@ def find_relevant_knowledge(*, vehicle: dict[str, Any] | None, symptom: str, lim
     return rows(query.execute())
 
 
-def list_problem_sources(*, user_id: int | None, problem_id: int | None, limit: int = 20) -> list[dict[str, Any]]:
+def list_problem_sources(*, user_id: Uuid | None, problem_id: Uuid | None, limit: int = 20) -> list[dict[str, Any]]:
     if user_id is None or problem_id is None:
         return []
     return rows(

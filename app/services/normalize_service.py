@@ -10,10 +10,8 @@ def normalize_chat_input(payload: dict, source: str | None = None) -> Normalized
     return NormalizedInput(
         source=str(source or payload.get("source") or "web"),
         text=text,
-        auth_user_id=str(payload.get("auth_user_id") or ""),
-        email=str(payload.get("email") or ""),
-        username=str(payload.get("username") or ""),
-        first_name=str(payload.get("first_name") or ""),
-        car_info=str(payload.get("car_info") or ""),
         language=language,
+        conversation_id=payload.get("conversation_id"),
+        vehicle_id=payload.get("vehicle_id"),
+        problem_id=payload.get("problem_id"),
     )

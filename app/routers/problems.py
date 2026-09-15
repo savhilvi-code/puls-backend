@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api", tags=["problems"])
 class ProblemPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    vehicle_id: int
+    vehicle_id: UUID
     title: str = ""
     problem_class: str = "OTHER"
     component: str = ""
@@ -76,20 +77,22 @@ def _payload_to_db(payload: ProblemPayload) -> dict[str, Any]:
 
 
 @router.get("/vehicles/{vehicle_id}/timeline")
-async def vehicle_timeline(vehicle_id: int, request: Request) -> dict[str, list[dict[str, Any]]]:
+async def vehicle_timeline(vehicle_id: UUID, request: Request) -> dict[str, list[dict[str, Any]]]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    if not repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_id):
+    vehicle_uuid = str(vehicle_id)
+    if not repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_uuid):
         raise HTTPException(status_code=404, detail="Vehicle not found.")
-    return {"events": repo.list_vehicle_events(user_id=user.id, vehicle_id=vehicle_id)}
+    return {"events": repo.list_vehicle_events(user_id=user.id, vehicle_id=vehicle_uuid)}
 
 
 @router.get("/vehicles/{vehicle_id}/problems")
-async def vehicle_problems(vehicle_id: int, request: Request, status: str = "active") -> dict[str, list[dict[str, Any]]]:
+async def vehicle_problems(vehicle_id: UUID, request: Request, status: str = "active") -> dict[str, list[dict[str, Any]]]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    if not repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_id):
+    vehicle_uuid = str(vehicle_id)
+    if not repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_uuid):
         raise HTTPException(status_code=404, detail="Vehicle not found.")
     statuses = repo.OPEN_PROBLEM_STATUSES if status == "active" else None
-    problems = repo.list_problems(user_id=user.id, vehicle_id=vehicle_id, statuses=statuses)
+    problems = repo.list_problems(user_id=user.id, vehicle_id=vehicle_uuid, statuses=statuses)
     if status == "closed":
         problems = [item for item in problems if str(item.get("status") or "").upper() in {"SOLVED", "CLOSED", "ARCHIVED"}]
     return {"problems": [_problem_response(item) for item in problems]}
@@ -98,23 +101,25 @@ async def vehicle_problems(vehicle_id: int, request: Request, status: str = "act
 @router.post("/problems")
 async def create_problem(payload: ProblemPayload, request: Request) -> dict[str, Any]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    if not repo.get_vehicle(user_id=user.id, vehicle_id=payload.vehicle_id):
+    vehicle_uuid = str(payload.vehicle_id)
+    if not repo.get_vehicle(user_id=user.id, vehicle_id=vehicle_uuid):
         raise HTTPException(status_code=404, detail="Vehicle not found.")
-    row = repo.save_problem(user_id=user.id, vehicle_id=payload.vehicle_id, payload=_payload_to_db(payload))
+    row = repo.save_problem(user_id=user.id, vehicle_id=vehicle_uuid, payload=_payload_to_db(payload))
     if not row:
         raise HTTPException(status_code=500, detail="Problem was not saved.")
     return {"problem": _problem_response(row)}
 
 
 @router.get("/problems/{problem_id}")
-async def get_problem(problem_id: int, request: Request) -> dict[str, Any]:
+async def get_problem(problem_id: UUID, request: Request) -> dict[str, Any]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    problem = repo.get_problem(user_id=user.id, problem_id=problem_id)
+    problem_uuid = str(problem_id)
+    problem = repo.get_problem(user_id=user.id, problem_id=problem_uuid)
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found.")
     vehicle = repo.get_vehicle(user_id=user.id, vehicle_id=problem.get("vehicle_id"))
-    events = repo.list_vehicle_events(user_id=user.id, vehicle_id=problem.get("vehicle_id"), problem_id=problem_id)
-    sources = repo.list_problem_sources(user_id=user.id, problem_id=problem_id)
+    events = repo.list_vehicle_events(user_id=user.id, vehicle_id=problem.get("vehicle_id"), problem_id=problem_uuid)
+    sources = repo.list_problem_sources(user_id=user.id, problem_id=problem_uuid)
     return {
         "vehicle": vehicle,
         "problem": _problem_response(problem),
@@ -124,10 +129,11 @@ async def get_problem(problem_id: int, request: Request) -> dict[str, Any]:
 
 
 @router.put("/problems/{problem_id}")
-async def update_problem(problem_id: int, payload: ProblemPayload, request: Request) -> dict[str, Any]:
+async def update_problem(problem_id: UUID, payload: ProblemPayload, request: Request) -> dict[str, Any]:
     user = await get_or_create_profile(request=request, require_auth=True)
-    existing = repo.get_problem(user_id=user.id, problem_id=problem_id)
+    problem_uuid = str(problem_id)
+    existing = repo.get_problem(user_id=user.id, problem_id=problem_uuid)
     if not existing:
         raise HTTPException(status_code=404, detail="Problem not found.")
-    row = repo.save_problem(user_id=user.id, vehicle_id=existing.get("vehicle_id"), problem_id=problem_id, payload=_payload_to_db(payload))
+    row = repo.save_problem(user_id=user.id, vehicle_id=existing.get("vehicle_id"), problem_id=problem_uuid, payload=_payload_to_db(payload))
     return {"problem": _problem_response(row or existing)}

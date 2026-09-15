@@ -2,8 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class UserRecord(BaseModel):
-    id: int | None = None
-    auth_user_id: str = ""
+    id: str | None = None
     email: str = ""
     username: str = ""
     first_name: str = ""

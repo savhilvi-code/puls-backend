@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from uuid import UUID
 
 from app.services.auth_service import get_or_create_profile
 from app.services.subscription_service import ensure_user_subscription, quota_payload
@@ -17,9 +18,9 @@ async def quota(request: Request) -> dict:
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def conversation_messages(conversation_id: int, request: Request) -> dict:
+async def conversation_messages(conversation_id: UUID, request: Request) -> dict:
     user = await get_or_create_profile(request=request, require_auth=True)
-    return {"items": repo.recent_conversation_messages(user_id=user.id, conversation_id=conversation_id, limit=100)}
+    return {"items": repo.recent_conversation_messages(user_id=user.id, conversation_id=str(conversation_id), limit=100)}
 
 
 @router.get("/history")
@@ -29,5 +30,5 @@ async def history(request: Request) -> dict:
 
 
 @router.get("/history/{conversation_id}")
-async def history_messages(conversation_id: int, request: Request) -> dict:
+async def history_messages(conversation_id: UUID, request: Request) -> dict:
     return await conversation_messages(conversation_id, request)

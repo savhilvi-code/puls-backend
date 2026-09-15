@@ -76,9 +76,9 @@ def _stage_payload(
 
 async def run_search_stages(
     *,
-    user_id: int | None,
-    vehicle_id: int | None,
-    problem_id: int | None,
+    user_id: str | None,
+    vehicle_id: str | None,
+    problem_id: str | None,
     vehicle_label: str,
     query: str,
     language: str,
