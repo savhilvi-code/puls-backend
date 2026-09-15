@@ -1,58 +1,65 @@
-# Architecture
+# Backend V2 Architecture
 
-## Overview
+## Boundaries
 
-PULS backend is a FastAPI service for the web version of the product. It receives requests from the frontend, coordinates backend processing, talks to external AI services when needed, and persists user-facing data in Supabase.
+The backend is organized around:
 
-At a high level, the backend is responsible for:
-
-- chat request handling;
-- user and vehicle-related API flows;
-- persistence of application data in Supabase;
-- integration with AI-powered response generation;
-- support-related intake and operational service endpoints.
-
-## Main Components
-
-### FastAPI
-
-The application entrypoint is built on FastAPI and exposes HTTP routes for the frontend and supporting product features.
-
-### Supabase
-
-Supabase is used as the hosted data layer for application persistence. The backend reads and writes product data through a server-side integration layer.
-
-### AI Integration
-
-PULS integrates with external AI providers to support assistant-style product features. The backend coordinates request preparation and response handling for those integrations.
-
-### Frontend / Backend Relationship
-
-The public site and app UI call the backend over HTTP. The frontend is responsible for presentation and user interaction, while the backend is responsible for data access, orchestration, and server-side business logic.
-
-## Project Layout
-
-The repository is organized around a standard backend structure:
-
-- `app/` contains FastAPI application code;
-- `app/routers/` contains HTTP route modules;
-- `app/services/` contains backend service logic;
-- `app/schemas/` contains request and response schemas;
-- `app/database/` contains database integration helpers;
-- `db/` contains SQL and database-related support files;
-- `tests/` contains backend tests and verification helpers.
+- `app/routers`: API surface.
+- `app/services/auth_service.py`: Supabase Auth/profile resolution.
+- `app/services/v2_repository.py`: Supabase V2 data access and ownership filters.
+- `app/services/conversation_orchestrator.py`: chat/context orchestration.
+- `app/services/search_stage_service.py`: staged research episodes and runs.
+- `app/services/parser_service.py`: parser/search extraction as an internal stage tool.
+- `app/services/openai_service.py` and `app/services/search_provider.py`: AI integrations.
 
 ## Runtime Flow
 
-At a high level, the runtime flow is:
+`/chat` resolves the authenticated profile, stores messages as communication, loads relevant structured context, and classifies the current turn.
 
-1. frontend sends a request to the backend;
-2. FastAPI routes the request to the appropriate module;
-3. backend services process the request;
-4. data is read from or written to Supabase when needed;
-5. the backend returns a structured response to the frontend.
+General conversation and meta-chat stay lightweight. A saved vehicle is silent unless the current turn is about it.
 
-## Notes
+Diagnostic turns resolve a vehicle and an active Problem. If critical context is missing, PULS asks one clarification question and stops. When context is sufficient, PULS checks internal structured knowledge first. External research starts only when more evidence is needed.
 
-- This public document intentionally stays at a high level.
-- Detailed operational flows, internal routing logic, and private implementation notes are maintained outside the public repository documentation set.
+## Persistence Model
+
+Communication:
+
+- `conversations`
+- `messages`
+
+Technical vehicle memory:
+
+- `vehicles`
+- `vehicle_specs`
+- `problems`
+- `vehicle_events`
+
+Research evidence:
+
+- `search_episodes`
+- `search_runs`
+- `sources`
+- `problem_sources`
+- `knowledge_items`
+- `knowledge_sources`
+
+Fleet experience:
+
+- `fleet_events`
+
+Billing:
+
+- `subscriptions`
+- `payments`
+
+## Search Stages
+
+A Problem owns a `search_episode`. Each research stage creates one `search_run` with `stage_number`, input context, result data, source lists, sufficiency, and next-stage reason.
+
+Stage count is not hard-coded to two. Each later stage receives previous-stage summaries and avoids repeating the same evidence without reason. If evidence is sufficient, research stops and quota is consumed once for the episode.
+
+## Security
+
+The backend uses Supabase Auth as identity foundation and `public.users` as the app profile. Route handlers resolve ownership server-side. Normal clients cannot modify payments or subscription entitlements.
+
+The Supabase service-role key is server-only and read from server environment variables. Publishable Supabase keys are not accepted for backend server writes.

@@ -1,30 +1,33 @@
-from fastapi import APIRouter, Query
+from __future__ import annotations
 
-from app.database.supabase import find_user_by_fields, get_user_by_id
-from app.services.request_journal_service import get_conversation_messages, get_user_request_history
+from fastapi import APIRouter, Request
+
+from app.services.auth_service import get_or_create_profile
 from app.services.subscription_service import ensure_user_subscription, quota_payload
+from app.services import v2_repository as repo
 
-router = APIRouter(prefix="/api", tags=["history"])
+router = APIRouter(prefix="/api", tags=["conversation"])
 
 
 @router.get("/quota")
-async def quota(
-    email: str = Query(default=""),
-    user_id: int | None = Query(default=None),
-    auth_user_id: str = Query(default=""),
-):
-    user = get_user_by_id(user_id) if user_id is not None else find_user_by_fields(auth_user_id=auth_user_id, email=email)
-    subscription = ensure_user_subscription(user_id=user.id if user else None)
+async def quota(request: Request) -> dict:
+    user = await get_or_create_profile(request=request, require_auth=True)
+    subscription = ensure_user_subscription(user_id=user.id)
     return {"quota": quota_payload(subscription)}
 
 
+@router.get("/conversations/{conversation_id}/messages")
+async def conversation_messages(conversation_id: int, request: Request) -> dict:
+    user = await get_or_create_profile(request=request, require_auth=True)
+    return {"items": repo.recent_conversation_messages(user_id=user.id, conversation_id=conversation_id, limit=100)}
+
+
 @router.get("/history")
-async def history(email: str = Query(default=""), user_id: int | None = Query(default=None), limit: int = Query(default=50, ge=1, le=100)):
-    items = await get_user_request_history(user_id=user_id, email=email, limit=limit)
-    return {"items": items}
+async def history(request: Request) -> dict:
+    user = await get_or_create_profile(request=request, require_auth=True)
+    return {"items": repo.recent_conversation_messages(user_id=user.id, limit=50)}
 
 
 @router.get("/history/{conversation_id}")
-async def history_messages(conversation_id: int, email: str = Query(default=""), user_id: int | None = Query(default=None)):
-    items = await get_conversation_messages(conversation_id=conversation_id, user_id=user_id, email=email)
-    return {"items": items}
+async def history_messages(conversation_id: int, request: Request) -> dict:
+    return await conversation_messages(conversation_id, request)

@@ -65,15 +65,16 @@ def unique_domains(domains: list[str]) -> list[str]:
 
 
 def run_claude_search(client, data: DiagnosticRequest, user_message: str, domains: list[str], *, system_prompt: str):
+    expanded = data.mode.lower() == "expanded"
     return client.messages.create(
         model=get_claude_search_model(),
-        max_tokens=5000 if data.mode.lower() == "deep" else 4000,
+        max_tokens=5000 if expanded else 4000,
         system=system_prompt,
         tools=[
             {
                 "type": "web_search_20250305",
                 "name": "web_search",
-                "max_uses": 6 if data.mode.lower() == "deep" else 3,
+                "max_uses": 6 if expanded else 3,
                 "allowed_domains": unique_domains(domains),
             }
         ],
@@ -82,15 +83,16 @@ def run_claude_search(client, data: DiagnosticRequest, user_message: str, domain
 
 
 def run_openai_search(client, data: DiagnosticRequest, user_message: str, domains: list[str], *, system_prompt: str):
+    expanded = data.mode.lower() == "expanded"
     return client.responses.create(
         model=get_openai_search_model(),
         instructions=system_prompt,
         input=user_message,
-        max_output_tokens=5000 if data.mode.lower() == "deep" else 4000,
+        max_output_tokens=5000 if expanded else 4000,
         tools=[
             {
                 "type": "web_search_preview",
-                "search_context_size": "high" if data.mode.lower() == "deep" else "medium",
+                "search_context_size": "high" if expanded else "medium",
             }
         ],
     )

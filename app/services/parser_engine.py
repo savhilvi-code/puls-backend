@@ -229,9 +229,9 @@ def build_allowed_domains(data: DiagnosticRequest) -> list[str]:
         "forum.auto.fr",
         "avtoportali.ge",
     ]
-    if data.mode.lower() != "deep":
+    if data.mode.lower() != "expanded":
         return unique_domains(base_domains)
-    text = f"{data.query} {data.car_info or ''} {data.conversation_history or ''}"
+    text = f"{data.query} {data.car_info or ''} {data.evidence_context or ''}"
     domains = list(base_domains)
     for group in detect_forum_groups(text):
         domains.extend(EXTRA_FORUMS.get(group, []))
@@ -253,7 +253,7 @@ async def _call_remote_parser(data: DiagnosticRequest, url: str) -> dict:
         "query": data.query,
         "lang": data.lang,
         "car_info": data.car_info,
-        "conversation_history": data.conversation_history,
+        "evidence_context": data.evidence_context,
         "mode": data.mode,
     }
 
@@ -314,7 +314,7 @@ def _combined_request_text(data: DiagnosticRequest) -> str:
         for part in (
             str(data.query or ""),
             str(data.car_info or ""),
-            str(data.conversation_history or ""),
+            str(data.evidence_context or ""),
         )
         if str(part or "").strip()
     ).lower()
@@ -459,8 +459,8 @@ async def diagnose(data: DiagnosticRequest) -> dict:
     context_parts = []
     if data.car_info:
         context_parts.append(f"Машина пользователя: {data.car_info}")
-    if data.conversation_history:
-        context_parts.append(f"История диалога: {data.conversation_history}")
+    if data.evidence_context:
+        context_parts.append(f"Previous search evidence: {data.evidence_context}")
     context = "\n".join(context_parts)
     user_message = (
         f"{context}\n\n"
@@ -476,7 +476,7 @@ async def diagnose(data: DiagnosticRequest) -> dict:
         + ", ".join(allowed_domains)
         + "."
     )
-    if mode == "deep":
+    if mode == "expanded":
         user_message += (
             "\n\nРЕЖИМ DEEP SEARCH: пользователь попросил больше информации. "
             "Ищи по расширенным автомобильным форумам, OEM-клубам и техническим сайтам. "

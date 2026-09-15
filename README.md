@@ -1,35 +1,26 @@
-# PULS Backend
+# PULS Backend V2
 
-Production backend for the PULS automotive diagnostics platform.
+FastAPI backend for the PULS automotive assistant.
 
-PULS Backend powers the live application at [pulscar.co](https://pulscar.co) and provides the server-side foundation for conversational vehicle diagnostics, vehicle-aware context handling, request history, support intake, and validated repair case accumulation.
+Backend V2 is built around the Supabase V2 domain model:
 
-## Technology
+- users
+- subscriptions and payments
+- vehicles and vehicle_specs
+- conversations and messages
+- problems and vehicle_events
+- knowledge_items and sources
+- search_episodes and search_runs
 
-- FastAPI
-- Python
-- Supabase / PostgreSQL
-- OpenAI models
-
-## MVP Capabilities
-
-- conversational automotive diagnostics
-- vehicle context
-- diagnostic history
-- validated repair case accumulation
-- parser and deep-search integration
-- support requests
-
-## Live Product
-
-- Website: [https://pulscar.co](https://pulscar.co)
+Chat remains natural by default. Stored vehicles and active technical Problems are structured context, not a reason to turn every short message into diagnostics.
 
 ## Local Run
 
-1. Copy `.env.example` to a local `.env`.
-2. Fill in the required environment variables for your local environment.
-3. Install dependencies from `requirements.txt`.
-4. Start the API:
+1. Copy `.env.example` to `.env`.
+2. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` for persistence.
+3. Set `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` for AI-backed chat/search.
+4. Install dependencies.
+5. Start the API:
 
 ```powershell
 uvicorn app.main:app --reload
@@ -37,5 +28,8 @@ uvicorn app.main:app --reload
 
 ## Notes
 
-- This repository contains the production backend for the public PULS web application.
-- Public documentation is intentionally high level and does not describe internal operational rules or private implementation details.
+- The production Supabase schema is authoritative.
+- The backend never uses a client-provided `user_id` for ownership-sensitive operations.
+- Search quota is stored in `subscriptions.quota_limit` and `subscriptions.quota_used`.
+- External research runs as Search Episode -> Search Run stage 1..N.
+- Raw chat history is communication history, not the vehicle's technical memory.

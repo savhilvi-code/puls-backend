@@ -1,237 +1,43 @@
-# PROJECT OVERVIEW
-
-## 1. Описание проекта
-
-PULS - это AI-система для автомобильной диагностики, которая помогает пользователю описать проблему, уточнить контекст автомобиля, найти похожие реальные случаи и получить понятный список проверок.
-
-Назначение системы - объединить интерфейс сайта, backend API, AI-маршрутизацию, парсер автомобильных форумов, базу знаний и историю обращений. PULS решает задачи первичной диагностики, поиска информации по форумам и базе знаний, подготовки ответа пользователю и сохранения полезных данных для дальнейшего развития сервиса.
-
-Основные технологии проекта:
-
-- Frontend: HTML, CSS, JavaScript, GitHub Pages.
-- Backend: Python, FastAPI, Pydantic, Uvicorn.
-- Data: Supabase.
-- AI: OpenAI, Claude.
-- Hosting: Render для backend, GitHub Pages для frontend.
-- Дополнительные интеграции: parser/search pipeline.
-
----
-
-## 2. Общая архитектура
-
-Система состоит из нескольких связанных компонентов:
-
-- Frontend отвечает за интерфейс сайта, страницы, ввод пользователя, отображение ответа и вызовы backend API.
-- Backend принимает API-запросы, маршрутизирует диалог, запускает AI, parser, knowledge base и работу с Supabase.
-- PULS Decision Engine внутри backend является единым центром принятия решений для `/chat`: определяет автомобиль, проверяет knowledge/history, выбирает Parser или Deep Search, контролирует лимиты и feedback-flow.
-- Supabase хранит пользователей, историю запросов, базу знаний и связанные диагностические данные.
-- OpenAI используется для AI-маршрутизации, генерации ответов и вспомогательных AI-задач.
-- Claude используется для глубокого поиска и анализа через cloud/search-ветку.
-- GitHub Pages публикует frontend.
-- Render запускает backend FastAPI.
-- Backend Supabase writes require `SUPABASE_SERVICE_ROLE_KEY` on Render. A publishable/anon Supabase key can pass read checks but cannot create users, conversations, messages, quota updates or parser_runs when RLS is enabled.
-- User vehicle cards are managed by backend `/api/vehicles` and stored in Supabase `vehicles`. Frontend may cache them locally, but Supabase is the source of truth after login.
-- Shared diagnostic knowledge is separated from personal vehicle ownership: deleting a vehicle removes the user's vehicle card and service logs, while confirmed solved cases keep brand/model/year/engine snapshots for reuse by other users with matching cars.
-
-```mermaid
-flowchart LR
-    User[User] --> Browser[Browser]
-    Browser --> Frontend[Frontend on GitHub Pages]
-    Frontend --> APIConfig[API Config]
-    APIConfig --> Backend[Backend FastAPI on Render]
-    Backend --> Routers[Routers]
-    Routers --> Decision[Decision Engine]
-    Decision --> Services[Services]
-    Services --> OpenAI[OpenAI]
-    Services --> Claude[Claude]
-    Services --> Parser[Parser / Deep Search]
-    Services --> KB[Knowledge Base]
-    KB --> Supabase[Supabase]
-    Services --> Supabase
-    Backend --> Response[Response]
-    Response --> Frontend
-```
-
----
-
-## 3. Репозитории проекта
-
-### Backend
-
-`puls-backend`
-
-Назначение:
-
-- FastAPI backend.
-- API для сайта и интеграций.
-- AI-логика и маршрутизация диалога.
-- Parser и deep search.
-- Knowledge Base.
-- Supabase-интеграция.
-
-### Frontend
-
-`cardiagnostic-ai`
-
-Назначение:
-
-- Интерфейс сайта.
-- HTML-страницы.
-- JavaScript-логика.
-- Работа с backend API.
-- Авторизация.
-- UI и клиентские состояния.
-
----
-
-## 4. Backend Architecture
-
-Подробная архитектура backend находится в:
-
-`ARCHITECTURE.md`
-
-Ключевые части backend:
-
-- routers - API endpoints и маршруты FastAPI.
-- decision engine - единый backend-центр обработки `/chat`, выбора knowledge_cases, Parser, Deep Search, feedback и списания лимитов.
-- services - бизнес-логика, AI, parser, formatter, users, history.
-- schemas - Pydantic-схемы запросов и ответов.
-- database - Supabase client и работа с базой.
-- prompts - системные инструкции и prompt-файлы.
-- parser - поиск и анализ внешних источников.
-- knowledge base - сохранение и поиск полезных диагностических кейсов.
-
----
-
-### Vehicle Ownership And Shared Knowledge
-
-- `/api/vehicles` is the backend API for personal cars in "My car".
-- `vehicles.id` is used as the stable vehicle id for conversations, messages, parser runs, video library entries and diagnostic requests when the car belongs to the user.
-- If a user asks about another car that is not saved in "My car", Decision Engine keeps that car as dialog context without creating a vehicle card automatically.
-- `solved_cases` and later `knowledge_cases` are shared diagnostic knowledge. They keep vehicle snapshot data so successful solutions remain available even after a user deletes a personal vehicle card.
-- Runtime chat context now comes from `conversations/messages/diagnostic_requests` plus the current request, not from `users.conversation_history` or `users.car_info`.
-- Parser and Deep Search quota is derived from `subscriptions.requests_limit/requests_used` and is consumed only after a successful parser/deep-search persistence flow.
-
-## 5. Frontend Architecture
-
-Подробная архитектура frontend находится в:
-
-`ARCHITECTURE_FRONTEND.md`
-
-Ключевые части frontend:
-
-- страницы - основные HTML-страницы и разделы сайта.
-- JavaScript - логика интерфейса, роутинг, API, auth, state.
-- assets - стили, изображения и клиентские модули.
-- api - вызовы backend FastAPI.
-- стили - визуальная система сайта.
-- взаимодействие с backend - отправка сообщений, получение ответов, история, авторизация.
-
----
-
-## 6. Правила разработки
-
-Всегда соблюдать следующие правила:
-
-- Не изменять рабочий код без необходимости.
-- Изменять только файлы, относящиеся к задаче.
-- Не выполнять массовый рефакторинг без отдельного разрешения.
-- Не создавать дублирующий функционал.
-- Использовать существующую архитектуру.
-- Не ломать взаимодействие frontend и backend.
-- Перед созданием новых сервисов проверить существующие.
-
----
-
-## 7. Документация проекта
-
-Backend:
-
-- `ARCHITECTURE.md` - карта backend: структура `app`, routers, services, schemas, database, зависимости, Supabase tables и поток запроса.
-- Backend `/health` reports Supabase diagnostics so Render environment issues are visible before testing chat persistence.
-- `CODEX_RULES.md` - правила работы Codex с backend-проектом.
-- `TASK_LOG.md` - журнал выполненных backend-задач и изменений документации.
-
-Frontend:
-
-- `ARCHITECTURE_FRONTEND.md` - карта frontend: HTML, CSS, JavaScript, pages, assets, API-вызовы и Supabase-использование.
-- `FRONTEND_CODEX_RULES.md` - правила работы Codex с frontend-проектом.
-- `FRONTEND_TASK_LOG.md` - журнал выполненных frontend-задач и изменений документации.
-
----
-
-## 8. Алгоритм работы Codex
-
-Перед выполнением любой задачи Codex обязан:
-
-1. Прочитать `PROJECT_OVERVIEW.md`.
-
-2. Определить:
-
-- Задача относится к frontend.
-- Задача относится к backend.
-- Задача относится к обоим проектам.
-
-3. Если задача относится к backend, дополнительно прочитать:
-
-- `ARCHITECTURE.md`
-- `CODEX_RULES.md`
-- `TASK_LOG.md`
-
-4. Если задача относится к frontend, дополнительно прочитать:
-
-- `ARCHITECTURE_FRONTEND.md`
-- `FRONTEND_CODEX_RULES.md`
-- `FRONTEND_TASK_LOG.md`
-
-5. Если задача затрагивает оба проекта - использовать документацию обоих репозиториев.
-
-После этого кратко описать своё понимание задачи и только потом приступать к изменению кода.
-
----
-
-## 9. После выполнения задачи
-
-После каждого изменения Codex должен определить:
-
-- Изменилась ли архитектура.
-- Появились ли новые сервисы.
-- Появились ли новые роутеры.
-- Появились ли новые страницы.
-- Появились ли новые API.
-- Изменились ли зависимости.
-
-Если архитектура изменилась:
-
-обновить соответствующий файл `ARCHITECTURE`.
-
-После каждой задачи обязательно обновлять соответствующий `TASK_LOG`.
-
-Если изменений архитектуры нет - `ARCHITECTURE` не изменять.
-
----
-
-## 10. Правила ведения документации
-
-Никогда не удалять существующие разделы.
-
-Никогда не удалять историю проекта.
-
-Никогда не удалять записи из `TASK_LOG`.
-
-Разрешается только:
-
-- Дополнять.
-- Обновлять.
-- Расширять.
-- Актуализировать документацию.
-
----
-
-## 11. Главный принцип
-
-Перед любыми изменениями сначала изучить документацию проекта.
-
-Если информации недостаточно - сначала задать уточняющий вопрос.
-
-Не начинать изменять код, пока не будет понятна архитектура и влияние изменений на остальные части системы.
+# PULS Backend V2 Overview
+
+This repository now represents one backend architecture: Backend Data Core V2.
+
+The source of truth is Supabase V2, centered on users, vehicles, problems, vehicle events, conversations, messages, knowledge, sources, staged search, subscriptions, and payments.
+
+The main interaction layer is conversational. The backend keeps communication history separate from technical vehicle memory. A clean chat can still load a selected vehicle and Problem as structured context for continuing an issue from My Car V2.
+
+External search is not a top-level state. It is a staged research process under a Problem:
+
+Problem -> Search Episode -> Search Run stage 1..N.
+
+Parser/search extraction is preserved as a stage tool, not as the primary conversation engine.
+
+## Active Runtime Modules
+
+- `app/main.py`
+- `app/routers/chat.py`
+- `app/routers/vehicles.py`
+- `app/routers/problems.py`
+- `app/routers/history.py`
+- `app/routers/search.py`
+- `app/routers/health.py`
+- `app/services/auth_service.py`
+- `app/services/v2_repository.py`
+- `app/services/conversation_orchestrator.py`
+- `app/services/search_stage_service.py`
+- `app/services/parser_service.py`
+- `app/services/parser_engine.py`
+- `app/services/search_provider.py`
+- `app/services/openai_service.py`
+- `app/services/subscription_service.py`
+- `app/services/vehicle_enrichment_service.py`
+
+## Explicitly Removed
+
+- Legacy diagnostic request persistence.
+- Legacy parser-run persistence.
+- Old case/history persistence.
+- Old solved-case and knowledge-case promotion flow.
+- Compatibility history journal.
+- Top-level parser/search endpoints.
+- Support intake from the backend data core.

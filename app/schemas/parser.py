@@ -9,5 +9,5 @@ class DiagnosticRequest(BaseModel):
     query: str
     lang: str = "ru"
     car_info: Optional[str] = None
-    conversation_history: Optional[str] = None
+    evidence_context: Optional[str] = None
     mode: str = "normal"

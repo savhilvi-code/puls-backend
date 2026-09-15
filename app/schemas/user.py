@@ -7,10 +7,7 @@ class UserRecord(BaseModel):
     email: str = ""
     username: str = ""
     first_name: str = ""
-    car_info: str = ""
     language: str = "en"
-    conversation_history: str = ""
-    requests_left: int = 5
 
 
 class KnowledgeCase(BaseModel):
