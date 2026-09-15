@@ -63,6 +63,11 @@ class SubscriptionV2Tests(unittest.TestCase):
 
         self.assertEqual(payload, {"remaining": 6, "used": 4, "limit": 10, "plan_type": "free", "unlimited": False})
 
+    def test_legacy_request_columns_are_not_quota_source_of_truth(self):
+        payload = subscriptions.quota_payload({"plan": "free", "requests_limit": 99, "requests_used": 98})
+
+        self.assertEqual(payload, {"remaining": 10, "used": 0, "limit": 10, "plan_type": "free", "unlimited": False})
+
     def test_consuming_research_credit_never_exceeds_limit(self):
         client = FakeClient([{"id": 1, "user_id": 7, "plan": "free", "status": "active", "quota_limit": 10, "quota_used": 10}])
 

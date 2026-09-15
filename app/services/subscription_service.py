@@ -17,10 +17,8 @@ def _free_period_end() -> str:
     return (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
 
 
-def _value(row: dict[str, Any], primary: str, fallback: str, default: int) -> int:
-    raw = row.get(primary)
-    if raw is None:
-        raw = row.get(fallback)
+def _int_value(row: dict[str, Any], key: str, default: int) -> int:
+    raw = row.get(key)
     try:
         return int(raw if raw is not None else default)
     except (TypeError, ValueError):
@@ -30,8 +28,8 @@ def _value(row: dict[str, Any], primary: str, fallback: str, default: int) -> in
 def _normalize_subscription(row: dict[str, Any] | None) -> dict[str, Any]:
     row = row or {}
     plan = str(row.get("plan") or "free")
-    limit = _value(row, "quota_limit", "requests_limit", PAID_LIMIT if plan == "paid" else FREE_LIMIT)
-    used = _value(row, "quota_used", "requests_used", 0)
+    limit = _int_value(row, "quota_limit", PAID_LIMIT if plan == "paid" else FREE_LIMIT)
+    used = _int_value(row, "quota_used", 0)
     used = min(max(used, 0), max(limit, 0))
     return {
         "id": row.get("id"),
@@ -126,7 +124,3 @@ def quota_payload(subscription: dict[str, Any] | None) -> dict[str, Any]:
         "plan_type": subscription["plan"],
         "unlimited": False,
     }
-
-
-can_run_parser = can_run_research
-consume_parser_credit = consume_research_credit
