@@ -5,7 +5,7 @@ from typing import Any
 
 from app.database.supabase import get_supabase_client, rows
 
-FREE_LIMIT = 10
+FREE_LIMIT = 5
 PAID_LIMIT = 100
 
 
