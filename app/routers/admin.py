@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.services.admin_service import (
     block_user,
     change_user_plan,
+    clear_user_history,
     delete_user_permanently,
     get_admin_user,
     list_users,
@@ -28,7 +29,10 @@ class ChangePlanRequest(BaseModel):
 
 
 @router.get("/users")
-async def admin_list_users(request: Request) -> dict[str, Any]:
+async def admin_list_users(
+    request: Request,
+) -> dict[str, Any]:
+
     require_admin(request)
 
     users = list_users()
@@ -44,6 +48,7 @@ async def admin_get_user(
     user_id: str,
     request: Request,
 ) -> dict[str, Any]:
+
     require_admin(request)
 
     return {
@@ -56,6 +61,7 @@ async def admin_reset_quota(
     user_id: str,
     request: Request,
 ) -> dict[str, Any]:
+
     require_admin(request)
 
     return {
@@ -70,6 +76,7 @@ async def admin_change_plan(
     payload: ChangePlanRequest,
     request: Request,
 ) -> dict[str, Any]:
+
     require_admin(request)
 
     return {
@@ -86,13 +93,14 @@ async def admin_block_user(
     user_id: str,
     request: Request,
 ) -> dict[str, Any]:
+
     acting_admin_id = require_admin(request)
 
     if user_id == acting_admin_id:
-        return {
-            "success": False,
-            "detail": "Administrator cannot block their own account.",
-        }
+        raise HTTPException(
+            status_code=400,
+            detail="Administrator cannot block their own account.",
+        )
 
     return {
         "success": True,
@@ -105,6 +113,7 @@ async def admin_unblock_user(
     user_id: str,
     request: Request,
 ) -> dict[str, Any]:
+
     require_admin(request)
 
     return {
@@ -113,11 +122,32 @@ async def admin_unblock_user(
     }
 
 
+@router.post("/users/{user_id}/clear-history")
+async def admin_clear_user_history(
+    user_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Delete the user's conversations and diagnostic history
+    while preserving the account, subscription and vehicles.
+    """
+
+    require_admin(request)
+
+    cleared = clear_user_history(user_id)
+
+    return {
+        "success": True,
+        "history": cleared,
+    }
+
+
 @router.delete("/users/{user_id}")
 async def admin_delete_user(
     user_id: str,
     request: Request,
 ) -> dict[str, Any]:
+
     acting_admin_id = require_admin(request)
 
     deleted = delete_user_permanently(
