@@ -92,10 +92,8 @@ def _auth_user_block_state(user_id: str) -> dict[str, Any]:
                 banned_until_dt = banned_until_dt.replace(tzinfo=timezone.utc)
 
             blocked = banned_until_dt > datetime.now(timezone.utc)
+
         except (TypeError, ValueError):
-            # If Supabase reports a non-empty ban value that cannot be parsed,
-            # treat it as blocked rather than incorrectly showing the account
-            # as active.
             blocked = True
 
     return {
@@ -119,7 +117,10 @@ def _with_auth_state(user: dict[str, Any]) -> dict[str, Any]:
         )
         return result
 
-    result.update(_auth_user_block_state(str(user_id)))
+    result.update(
+        _auth_user_block_state(str(user_id))
+    )
+
     return result
 
 
@@ -145,7 +146,9 @@ def require_admin(request: Request) -> str:
             .limit(1)
             .execute()
         )
+
         found = rows(response)
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -174,14 +177,19 @@ def list_users() -> list[dict[str, Any]]:
             .order("created_at", desc=True)
             .execute()
         )
+
         users = rows(response)
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail="Failed to load users.",
         ) from exc
 
-    return [_with_auth_state(user) for user in users]
+    return [
+        _with_auth_state(user)
+        for user in users
+    ]
 
 
 def get_admin_user(user_id: str) -> dict[str, Any]:
@@ -194,7 +202,9 @@ def get_admin_user(user_id: str) -> dict[str, Any]:
             .limit(1)
             .execute()
         )
+
         found = rows(response)
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -213,8 +223,15 @@ def get_admin_user(user_id: str) -> dict[str, Any]:
 def reset_user_quota(user_id: str) -> dict[str, Any]:
     user = get_admin_user(user_id)
 
-    plan = str(user.get("plan") or "free").lower()
-    quota_limit = PAID_LIMIT if plan == "paid" else FREE_LIMIT
+    plan = str(
+        user.get("plan") or "free"
+    ).lower()
+
+    quota_limit = (
+        PAID_LIMIT
+        if plan == "paid"
+        else FREE_LIMIT
+    )
 
     try:
         response = (
@@ -231,7 +248,9 @@ def reset_user_quota(user_id: str) -> dict[str, Any]:
             .in_("status", ["active", "trialing"])
             .execute()
         )
+
         updated = rows(response)
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -253,18 +272,31 @@ def reset_user_quota(user_id: str) -> dict[str, Any]:
     }
 
 
-def change_user_plan(user_id: str, plan: str) -> dict[str, Any]:
+def change_user_plan(
+    user_id: str,
+    plan: str,
+) -> dict[str, Any]:
+
     get_admin_user(user_id)
 
-    normalized_plan = str(plan or "").strip().lower()
+    normalized_plan = str(
+        plan or ""
+    ).strip().lower()
 
-    if normalized_plan not in {"free", "paid"}:
+    if normalized_plan not in {
+        "free",
+        "paid",
+    }:
         raise HTTPException(
             status_code=400,
             detail="Plan must be 'free' or 'paid'.",
         )
 
-    quota_limit = PAID_LIMIT if normalized_plan == "paid" else FREE_LIMIT
+    quota_limit = (
+        PAID_LIMIT
+        if normalized_plan == "paid"
+        else FREE_LIMIT
+    )
 
     try:
         response = (
@@ -280,10 +312,19 @@ def change_user_plan(user_id: str, plan: str) -> dict[str, Any]:
                 }
             )
             .eq("user_id", user_id)
-            .in_("status", ["active", "trialing", "inactive"])
+            .in_(
+                "status",
+                [
+                    "active",
+                    "trialing",
+                    "inactive",
+                ],
+            )
             .execute()
         )
+
         updated = rows(response)
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -316,6 +357,7 @@ def block_user(user_id: str) -> dict[str, Any]:
                 "ban_duration": "876000h",
             },
         )
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -338,6 +380,7 @@ def unblock_user(user_id: str) -> dict[str, Any]:
                 "ban_duration": "none",
             },
         )
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -347,6 +390,44 @@ def unblock_user(user_id: str) -> dict[str, Any]:
     return {
         "user_id": user_id,
         "blocked": False,
+    }
+
+
+def clear_user_history(
+    user_id: str,
+) -> dict[str, Any]:
+    """
+    Delete conversations and diagnostic history for a PULS user
+    while preserving:
+    - Supabase Auth account
+    - public.users profile
+    - subscription
+    - payments
+    - vehicles
+    - vehicle_specs
+    - global PULS knowledge
+    """
+
+    user = get_admin_user(user_id)
+
+    try:
+        get_supabase_client().rpc(
+            "admin_clear_user_history",
+            {
+                "target_user_id": user_id,
+            },
+        ).execute()
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to clear user history.",
+        ) from exc
+
+    return {
+        "cleared": True,
+        "user_id": user_id,
+        "email": user.get("email"),
     }
 
 
@@ -386,6 +467,7 @@ def delete_user_permanently(
 
     except HTTPException:
         raise
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -399,6 +481,7 @@ def delete_user_permanently(
                 "target_user_id": user_id,
             },
         ).execute()
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -407,6 +490,7 @@ def delete_user_permanently(
 
     try:
         _auth_admin().delete_user(user_id)
+
     except Exception as exc:
         raise HTTPException(
             status_code=503,
