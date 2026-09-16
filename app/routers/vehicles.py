@@ -18,15 +18,20 @@ class VehiclePayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     brand: str = ""
+    make: str = ""
     model: str = ""
     generation: str = ""
     year: int | str | None = None
     engine: str = ""
+    engine_code: str = ""
     fuel: str = ""
     fuel_type: str = ""
     transmission: str = ""
     drive: str = ""
+    drivetrain: str = ""
     vin: str = ""
+    chassis_number: str = ""
+    mileage_unit: str = ""
     nickname: str = ""
     mileage: int | str | None = None
     photo_url: str = ""
@@ -50,23 +55,27 @@ def _safe_int(value: int | str | None) -> int | None:
 
 
 def _payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
+    identifier = payload.vin.strip()
+    # The compatibility form has one VIN/frame input; V2 stores them separately.
+    chassis = payload.chassis_number.strip()
+    if identifier and len(identifier) != 17:
+        chassis = chassis or identifier
+        identifier = ""
     return {
-        "brand": payload.brand.strip(),
+        "make": (payload.make or payload.brand).strip(),
         "model": payload.model.strip(),
         "generation": payload.generation.strip(),
         "year": _safe_int(payload.year),
-        "engine": payload.engine.strip(),
-        "fuel": (payload.fuel or payload.fuel_type).strip(),
+        "engine_code": (payload.engine_code or payload.engine).strip(),
         "fuel_type": (payload.fuel_type or payload.fuel).strip(),
         "transmission": payload.transmission.strip(),
-        "drive": payload.drive.strip(),
-        "vin": payload.vin.strip(),
+        "drivetrain": (payload.drivetrain or payload.drive).strip(),
+        "vin": identifier or None,
+        "chassis_number": chassis or None,
+        **({"mileage_unit": payload.mileage_unit.strip()} if payload.mileage_unit.strip() else {}),
         "nickname": payload.nickname.strip(),
         "mileage": _safe_int(payload.mileage),
         "photo_url": payload.photo_url.strip(),
-        "country": payload.country.strip(),
-        "city": payload.city.strip(),
-        "notes": payload.notes.strip(),
     }
 
 
@@ -85,18 +94,23 @@ def _specs_payload_to_db(payload: VehiclePayload) -> dict[str, Any]:
 def _vehicle_response(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("id"),
-        "brand": row.get("brand") or "",
+        "make": row.get("make") or row.get("brand") or "",
+        "brand": row.get("make") or row.get("brand") or "",
         "model": row.get("model") or "",
         "generation": row.get("generation") or "",
         "year": row.get("year") or "",
-        "engine": row.get("engine") or "",
+        "engine_code": row.get("engine_code") or row.get("engine") or "",
+        "engine": row.get("engine_code") or row.get("engine") or "",
         "fuel": row.get("fuel") or row.get("fuel_type") or "",
         "fuel_type": row.get("fuel_type") or row.get("fuel") or "",
         "transmission": row.get("transmission") or "",
-        "drive": row.get("drive") or "",
-        "vin": row.get("vin") or "",
+        "drivetrain": row.get("drivetrain") or row.get("drive") or "",
+        "drive": row.get("drivetrain") or row.get("drive") or "",
+        "vin": row.get("vin") or row.get("chassis_number") or "",
+        "chassis_number": row.get("chassis_number") or "",
         "nickname": row.get("nickname") or "",
-        "mileage": row.get("mileage") or "",
+        "mileage": row.get("mileage") if row.get("mileage") is not None else "",
+        "mileage_unit": row.get("mileage_unit") or "km",
         "photo_url": row.get("photo_url") or "",
         "country": row.get("country") or "",
         "city": row.get("city") or "",
@@ -110,7 +124,7 @@ def _vehicle_response(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _has_vehicle_identity(payload: VehiclePayload) -> bool:
-    return bool(payload.brand.strip() and payload.model.strip())
+    return bool((payload.make or payload.brand).strip() and payload.model.strip())
 
 
 @router.get("")
