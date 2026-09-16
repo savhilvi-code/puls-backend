@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from typing import Any
 from uuid import UUID
 
@@ -540,12 +542,17 @@ async def process_chat_message_v2(
         payload.get("conversation_id")
     )
 
-    recent_messages = (
-        repo.recent_conversation_messages(
-            user_id=user.id,
-            conversation_id=conversation_id,
-        )
-    )
+    # A new visible session must not inherit expired raw message context.
+    recent_messages = repo.recent_conversation_messages(
+        user_id=user.id, conversation_id=conversation_id,
+    ) if conversation_id else []
+    if recent_messages:
+        last = datetime.fromisoformat(recent_messages[-1]["created_at"].replace("Z", "+00:00"))
+        if (datetime.now(timezone.utc) - last).total_seconds() >= 12 * 60 * 60:
+            conversation_id = None
+            recent_messages = []
+    elif conversation_id:
+        conversation_id = None
 
     latest_problem = (
         _latest_problem_for_context(
@@ -625,6 +632,12 @@ async def process_chat_message_v2(
         conversation or {}
     ).get("id")
 
+    response_context = {
+        "conversation_id": conversation_id,
+        "vehicle_id": (conversation or {}).get("vehicle_id"),
+        "problem_id": (conversation or {}).get("problem_id"),
+    }
+
     context = TurnContext(
         mode=mode,
         language=language,
@@ -678,11 +691,7 @@ async def process_chat_message_v2(
         answer = plain_text_response(
             await _natural_reply(
                 context,
-                recent_messages=(
-                    recent_messages
-                    if mode == "META_CHAT"
-                    else []
-                ),
+                recent_messages=recent_messages,
                 fallback=fallback,
             )
         )
@@ -707,7 +716,7 @@ async def process_chat_message_v2(
             language=language,
         )
 
-        return ChatResponse(
+        return ChatResponse(**response_context,
             answer=answer,
             links=[],
             quota=quota_payload(
@@ -752,7 +761,7 @@ async def process_chat_message_v2(
             language=language,
         )
 
-        return ChatResponse(
+        return ChatResponse(**response_context,
             answer=answer,
             links=[],
             quota=quota_payload(
@@ -793,7 +802,7 @@ async def process_chat_message_v2(
             language=language,
         )
 
-        return ChatResponse(
+        return ChatResponse(**response_context,
             answer=answer,
             links=[],
             quota=quota_payload(
@@ -874,7 +883,7 @@ async def process_chat_message_v2(
             language=language,
         )
 
-        return ChatResponse(
+        return ChatResponse(**response_context,
             answer=answer,
             links=[],
             quota=quota_payload(
@@ -987,7 +996,7 @@ async def process_chat_message_v2(
             language=language,
         )
 
-        return ChatResponse(
+        return ChatResponse(**response_context,
             answer=answer,
             links=[],
             quota=quota_payload(
@@ -1076,7 +1085,7 @@ async def process_chat_message_v2(
         language=language,
     )
 
-    return ChatResponse(
+    return ChatResponse(**response_context,
         answer=answer,
         links=research.links,
         quota=quota_payload(

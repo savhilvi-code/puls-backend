@@ -618,7 +618,7 @@ def recent_conversation_messages(
             .select("id")
             .eq("user_id", user_id)
             .eq("status", "ACTIVE")
-            .order("updated_at", desc=True)
+            .order("last_message_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -634,7 +634,7 @@ def recent_conversation_messages(
 
     conversation = _one(
         client.table("conversations")
-        .select("id")
+        .select("id,vehicle_id,problem_id")
         .eq("id", conversation_id)
         .eq("user_id", user_id)
         .limit(1)
@@ -655,6 +655,8 @@ def recent_conversation_messages(
 
     # Compatibility for code that previously consumed message_text.
     for item in found:
+        item["vehicle_id"] = item.get("metadata", {}).get("vehicle_id") or conversation.get("vehicle_id")
+        item["problem_id"] = item.get("metadata", {}).get("problem_id") or conversation.get("problem_id")
         if "message_text" not in item:
             item["message_text"] = item.get("content", "")
 

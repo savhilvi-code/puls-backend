@@ -25,6 +25,9 @@ class LinkItem(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    conversation_id: str | None = None
+    vehicle_id: str | None = None
+    problem_id: str | None = None
     answer: str = ""
     links: list[LinkItem] = Field(default_factory=list)
     quota: dict = Field(default_factory=dict)
