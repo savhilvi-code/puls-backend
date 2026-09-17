@@ -66,7 +66,14 @@ class SubscriptionV2Tests(unittest.TestCase):
     def test_legacy_request_columns_are_not_quota_source_of_truth(self):
         payload = subscriptions.quota_payload({"plan": "free", "requests_limit": 99, "requests_used": 98})
 
-        self.assertEqual(payload, {"remaining": 10, "used": 0, "limit": 10, "plan_type": "free", "unlimited": False})
+        self.assertEqual(payload, {"remaining": 5, "used": 0, "limit": 5, "plan_type": "free", "unlimited": False})
+
+    def test_existing_custom_quota_is_not_silently_rewritten(self):
+        client = FakeClient([{"id": 1, "user_id": 7, "plan": "free", "status": "active", "quota_limit": 3, "quota_used": 1}])
+        with patch.object(subscriptions, "get_supabase_client", return_value=client):
+            existing = subscriptions.ensure_user_subscription(user_id=7)
+        self.assertEqual(existing["quota_limit"], 3)
+        self.assertFalse(any(call[0] in {"insert", "update"} for call in client.query.calls))
 
     def test_consuming_research_credit_never_exceeds_limit(self):
         client = FakeClient([{"id": 1, "user_id": 7, "plan": "free", "status": "active", "quota_limit": 10, "quota_used": 10}])
