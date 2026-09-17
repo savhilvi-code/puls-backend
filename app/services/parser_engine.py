@@ -229,6 +229,8 @@ def build_allowed_domains(data: DiagnosticRequest) -> list[str]:
         "forum.auto.fr",
         "avtoportali.ge",
     ]
+    if _has_explicit_video_intent(data):
+        base_domains.extend(["youtube.com", "youtu.be"])
     if data.mode.lower() != "deep":
         return unique_domains(base_domains)
     text = f"{data.query} {data.car_info or ''} {data.evidence_context or ''}"
@@ -254,6 +256,9 @@ async def _call_remote_parser(data: DiagnosticRequest, url: str) -> dict:
         "lang": data.lang,
         "car_info": data.car_info,
         "evidence_context": data.evidence_context,
+        # Temporary compatibility for the deployed parser contract. The
+        # canonical field remains evidence_context.
+        "conversation_history": data.evidence_context,
         "mode": data.mode,
     }
 
@@ -319,6 +324,30 @@ def _combined_request_text(data: DiagnosticRequest) -> str:
         if str(part or "").strip()
     ).lower()
     return text
+
+
+def _has_explicit_video_intent(data: DiagnosticRequest) -> bool:
+    text = _combined_request_text(data)
+    return any(
+        term in text
+        for term in (
+            "youtube", "youtu.be", "ютуб", "видео", "video",
+            "как заменить", "как поменять", "как снять", "как установить",
+            "how to replace", "how to remove", "how to install",
+        )
+    )
+
+
+def _has_explicit_visual_intent(data: DiagnosticRequest) -> bool:
+    text = _combined_request_text(data)
+    return any(
+        term in text
+        for term in (
+            "покажи фото", "покажи изображение", "покажи схему",
+            "как выглядит", "где находится", "image", "photo", "diagram",
+            "what does it look like", "where is it located",
+        )
+    )
 
 
 def _build_search_hints(data: DiagnosticRequest) -> list[str]:
@@ -509,7 +538,10 @@ async def diagnose(data: DiagnosticRequest) -> dict:
     allowed_domains = build_allowed_domains(data)
     remote_url = _remote_parser_url()
 
-    if remote_url:
+    if remote_url and not (
+        _has_explicit_video_intent(data)
+        or _has_explicit_visual_intent(data)
+    ):
         try:
             remote_result = await _call_remote_parser(data, remote_url)
             if not remote_result.get("error") or _has_usable_remote_evidence(remote_result):

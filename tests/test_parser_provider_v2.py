@@ -133,6 +133,24 @@ class ParserProviderV2Tests(unittest.TestCase):
         self.assertTrue(any("YouTube" in hint for hint in video))
         self.assertTrue(any("visual material" in hint for hint in image))
 
+    def test_explicit_media_request_uses_single_local_provider_path(self):
+        request = DiagnosticRequest(
+            query="Покажи видео как заменить соленоид",
+            lang="ru",
+        )
+        local_result = _parser_payload("Video result")
+        with (
+            patch.object(parser_engine, "_remote_parser_url", return_value="https://remote.example/search"),
+            patch.object(parser_engine, "_call_remote_parser", new=AsyncMock()) as remote_call,
+            patch.object(parser_engine, "run_search_provider", return_value=local_result) as provider_call,
+        ):
+            result = asyncio.run(parser_engine.diagnose(request))
+
+        self.assertEqual(result["summary"], "Video result")
+        remote_call.assert_not_called()
+        provider_call.assert_called_once()
+        self.assertIn("youtube.com", provider_call.call_args.kwargs["allowed_domains"])
+
 
 if __name__ == "__main__":
     unittest.main()
