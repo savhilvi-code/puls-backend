@@ -69,6 +69,24 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIsNone(saved_messages[0].kwargs["vehicle_id"])
         self.assertIsNone(saved_messages[0].kwargs["problem_id"])
 
+    def test_russian_message_overrides_english_ui_locale_and_is_persisted(self):
+        response, mocks = self._run_chat(
+            "У меня Peugeot XU9J2, горит Check Engine и проблема с АКПП на горячую"
+        )
+
+        self.assertEqual(mocks["natural"].call_args.args[0].language, "ru")
+        saved_messages = mocks["save_message"].call_args_list
+        self.assertEqual(saved_messages[0].kwargs["language"], "ru")
+        self.assertEqual(saved_messages[1].kwargs["language"], "ru")
+
+    def test_explicit_response_switch_does_not_change_user_message_language(self):
+        response, mocks = self._run_chat("Ответь на английском, пожалуйста.")
+
+        self.assertEqual(mocks["natural"].call_args.args[0].language, "en")
+        saved_messages = mocks["save_message"].call_args_list
+        self.assertEqual(saved_messages[0].kwargs["language"], "ru")
+        self.assertEqual(saved_messages[1].kwargs["language"], "en")
+
     def test_ambiguous_vehicle_asks_one_question_before_research(self):
         response, mocks = self._run_chat("I hear a strange noise", vehicles=[_vehicle(VEHICLE_ID, "Nissan"), _vehicle("55555555-5555-4555-8555-555555555555", "Toyota")])
 

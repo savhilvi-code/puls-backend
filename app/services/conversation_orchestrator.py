@@ -32,6 +32,11 @@ from app.services.v2_context import (
     vehicle_label,
 )
 from app.services import v2_repository as repo
+from app.utils.language import (
+    detect_language,
+    normalize_language_code,
+    requested_response_language,
+)
 
 
 def _vehicle_match_score(
@@ -516,16 +521,19 @@ async def process_chat_message_v2(
         or ""
     ).strip()
 
-    language = str(
-        payload.get("language")
-        or "en"
+    payload_language = normalize_language_code(
+        payload.get("language") or "en"
+    )
+    message_language = detect_language(
+        text,
+        fallback=payload_language,
     )
 
     user = await get_or_create_profile(
         request=request,
         payload={
             **payload,
-            "language": language,
+            "language": message_language,
         },
         require_auth=_has_bearer(request),
     )
@@ -553,6 +561,20 @@ async def process_chat_message_v2(
             recent_messages = []
     elif conversation_id:
         conversation_id = None
+
+    conversational_language = next(
+        (
+            normalize_language_code(item.get("language"))
+            for item in reversed(recent_messages)
+            if str(item.get("language") or "").strip()
+        ),
+        payload_language,
+    )
+    message_language = detect_language(
+        text,
+        fallback=conversational_language,
+    )
+    language = requested_response_language(text) or message_language
 
     latest_problem = (
         _latest_problem_for_context(
@@ -703,7 +725,7 @@ async def process_chat_message_v2(
             problem_id=None,
             role="user",
             text=text,
-            language=language,
+            language=message_language,
         )
 
         repo.save_message(
@@ -750,7 +772,7 @@ async def process_chat_message_v2(
             conversation_id=conversation_id,
             role="user",
             text=text,
-            language=language,
+            language=message_language,
         )
 
         repo.save_message(
@@ -791,7 +813,7 @@ async def process_chat_message_v2(
             conversation_id=conversation_id,
             role="user",
             text=text,
-            language=language,
+            language=message_language,
         )
 
         repo.save_message(
@@ -868,7 +890,7 @@ async def process_chat_message_v2(
             ).get("id"),
             role="user",
             text=text,
-            language=language,
+            language=message_language,
         )
 
         repo.save_message(
@@ -981,7 +1003,7 @@ async def process_chat_message_v2(
             ).get("id"),
             role="user",
             text=text,
-            language=language,
+            language=message_language,
         )
 
         repo.save_message(
@@ -1070,7 +1092,7 @@ async def process_chat_message_v2(
         ).get("id"),
         role="user",
         text=text,
-        language=language,
+        language=message_language,
     )
 
     repo.save_message(
