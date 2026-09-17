@@ -63,3 +63,7 @@ Stage count is not hard-coded to two. Each later stage receives previous-stage s
 The backend uses Supabase Auth as identity foundation and `public.users` as the app profile. Route handlers resolve ownership server-side. Normal clients cannot modify payments or subscription entitlements.
 
 The Supabase service-role key is server-only and read from server environment variables. Publishable Supabase keys are not accepted for backend server writes.
+
+## Admin Data Inspector
+
+`/admin/knowledge/*` is a read-only observability API for canonical V2 data. Every route reuses `admin_accounts` authorization. Parent lists are paginated; conversation messages, search runs, and Problem Trace are loaded through parent-scoped endpoints so the browser never queries privileged Supabase tables directly or downloads the full dataset at startup.

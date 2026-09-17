@@ -1,5 +1,11 @@
 # Task Log
 
+## 2026-09-17 — Admin Knowledge Base Data Inspector V1
+
+- Added authenticated, read-only `/admin/knowledge/*` endpoints over the existing canonical V2 tables. List endpoints are bounded and paginated; messages load by expanded conversation, search runs load by expanded episode, and Problem Trace resolves only existing relations.
+- Kept `admin_accounts` as the authorization authority and kept all browser access behind the backend service-role client. No Supabase schema, conversation lifecycle, search execution, parser, or Intelligence behavior changed.
+- Added focused coverage that every Data Inspector route is GET-only, admin authorization runs before reads, child data is scoped to its parent, and page sizes are bounded.
+
 ## 2026-09-16 — stabilization Phase A
 
 - Reproduced authenticated production `POST /api/vehicles` returning HTTP 500, with no created vehicle. Confirmed through read-only PostgREST column checks that the route forwarded nonexistent `fuel`, `drive`, `country`, `city`, `notes` columns. Current repository already mapped brand/engine; the remaining route payload was stale.
