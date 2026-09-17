@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import json
+from urllib.parse import urlparse
 
 from app.schemas.parser import DiagnosticRequest
 from app.services.parser_engine import diagnose, extract_json
@@ -432,12 +434,66 @@ def _has_usable_payload(data: dict) -> bool:
     return False
 
 
+def _recover_malformed_payload_text(text: str) -> dict:
+    """Recover only explicit summary text and complete URLs; never infer facts."""
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+
+    summary = ""
+    summary_match = re.search(
+        r'"(?:parser_summary|summary|recommendation)"\s*:\s*"((?:\\.|[^"\\])*)',
+        raw,
+        re.IGNORECASE,
+    )
+    if summary_match:
+        encoded = '"' + summary_match.group(1) + '"'
+        try:
+            summary = str(json.loads(encoded)).strip()
+        except (json.JSONDecodeError, TypeError):
+            summary = summary_match.group(1).replace(r'\"', '"').strip()
+    elif "{" in raw:
+        prefix = raw.split("{", 1)[0].strip(" \n\r\t:-")
+        if prefix and not _looks_like_meta_search_text(prefix):
+            summary = prefix
+
+    links: list[dict] = []
+    seen: set[str] = set()
+    for match in re.finditer(r'https?:\\?/\\?/[^\s"\'<>}\]]+', raw, re.IGNORECASE):
+        url = match.group(0).replace(r"\/", "/").rstrip(".,;:)")
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        links.append({
+            "title": parsed.netloc,
+            "url": url,
+            "description": "Recovered verbatim from provider output.",
+            "type": "video" if any(
+                domain in parsed.netloc.lower()
+                for domain in ("youtube.com", "youtu.be", "rutube.ru", "vimeo.com")
+            ) else "link",
+        })
+
+    recovered: dict = {}
+    if summary and not _looks_like_embedded_payload_text(summary):
+        recovered["parser_summary"] = summary[:2000]
+    if links:
+        recovered["links"] = links
+    return recovered
+
+
 def _merge_embedded_json_payload(data: dict) -> dict:
     if not isinstance(data, dict):
         return data
 
+    recovery_texts: list[str] = []
     for key in ("parser_summary", "summary", "recommendation"):
         text = str(data.get(key) or "").strip()
+        if text:
+            recovery_texts.append(text)
         if "{" not in text or "}" not in text:
             continue
         parsed = extract_json(text)
@@ -466,7 +522,22 @@ def _merge_embedded_json_payload(data: dict) -> dict:
         merged["_embedded_json_extracted"] = True
         return merged
 
-    return data
+    recovered: dict = {}
+    for text in recovery_texts:
+        partial = _recover_malformed_payload_text(text)
+        if partial.get("parser_summary") and not recovered.get("parser_summary"):
+            recovered["parser_summary"] = partial["parser_summary"]
+        if partial.get("links"):
+            recovered.setdefault("links", []).extend(partial["links"])
+    if not recovered:
+        return data
+    merged = dict(data)
+    if recovered.get("parser_summary"):
+        merged["parser_summary"] = recovered["parser_summary"]
+    if recovered.get("links"):
+        merged["links"] = _normalize_links(recovered["links"])
+    merged["_malformed_payload_recovered"] = True
+    return merged
 
 
 async def parse_diagnostic(router_json: dict) -> dict:

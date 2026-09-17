@@ -151,6 +151,22 @@ class ParserProviderV2Tests(unittest.TestCase):
         provider_call.assert_called_once()
         self.assertIn("youtube.com", provider_call.call_args.kwargs["allowed_domains"])
 
+    def test_malformed_embedded_json_recovers_literal_summary_and_link(self):
+        raw = (
+            'Search completed. {"summary":"Hot ATF pressure loss is reported",'
+            '"links":[{"url":"https://example.com/forum/thread-42'
+        )
+        with patch.object(
+            parser_service,
+            "diagnose",
+            new=AsyncMock(return_value={"summary": raw}),
+        ):
+            result = asyncio.run(parser_service.parse_diagnostic({"query": "gearbox hot"}))
+
+        self.assertEqual(result["parser_summary"], "Hot ATF pressure loss is reported")
+        self.assertEqual(result["links"][0]["url"], "https://example.com/forum/thread-42")
+        self.assertTrue(result["_raw"]["_malformed_payload_recovered"])
+
 
 if __name__ == "__main__":
     unittest.main()

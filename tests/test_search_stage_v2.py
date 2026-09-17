@@ -18,7 +18,7 @@ class SearchStageV2Tests(unittest.TestCase):
         with (
             patch.object(stages, "can_run_research", return_value=(True, {"quota_limit": 10, "quota_used": 0})),
             patch.object(stages, "consume_research_credit", return_value={"quota_limit": 10, "quota_used": 1}) as consume,
-            patch.object(stages.repo, "create_search_episode", return_value={"id": 77}),
+            patch.object(stages.repo, "create_search_episode", return_value={"id": 77}) as create_episode,
             patch.object(stages.repo, "get_latest_problem_research", return_value=None),
             patch.object(stages.repo, "create_search_run", side_effect=lambda **kwargs: {"id": kwargs["payload"]["stage_number"], **kwargs["payload"]}) as create_run,
             patch.object(stages.repo, "update_search_episode") as update_episode,
@@ -45,6 +45,7 @@ class SearchStageV2Tests(unittest.TestCase):
         self.assertTrue(create_run.call_args.kwargs["payload"]["sufficient_evidence"])
         update_episode.assert_called_once()
         link_source.assert_called_once()
+        self.assertEqual(create_episode.call_args.kwargs["trigger_type"], "DIAGNOSTIC")
 
     def test_stage_two_receives_previous_stage_evidence(self):
         runner = AsyncMock(

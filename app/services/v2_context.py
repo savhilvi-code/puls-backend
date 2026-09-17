@@ -318,13 +318,58 @@ def looks_like_meta_question(text: str) -> bool:
             "conversation",
             "what you said",
             "what do you mean",
+            "what car do i have",
+            "do you know my car",
             "помн",
             "контекст",
             "переписк",
             "что ты сказал",
             "что ты имеешь",
+            "какая у меня машина",
+            "знаешь мою машину",
         ),
     )
+
+
+def is_reference_request(text: str) -> bool:
+    """Return True for vehicle HOWTO/reference requests, not fault reports."""
+    lowered = normalize_phrase(text)
+    request_markers = (
+        "youtube", "ютуб", "видео", "video", "manual", "мануал",
+        "инструкц", "ссылк", "link", "схем", "diagram", "photo", "фото",
+        "как заменить", "как поменять", "как снять", "как установить",
+        "how to replace", "how to change", "how to remove", "how to install",
+        "где находится", "where is", "расположение", "location",
+        "какое масло", "какую жидкость", "what oil", "which oil",
+        "спецификац", "допуск масла", "oil specification",
+    )
+    return any(marker in lowered for marker in request_markers)
+
+
+def is_factual_technical_statement(text: str) -> bool:
+    """Accept only user statements that establish a vehicle technical fact."""
+    source = str(text or "").strip()
+    lowered = normalize_phrase(source)
+    if (
+        not source
+        or is_social_general_text(source)
+        or looks_like_meta_question(source)
+        or is_reference_request(source)
+    ):
+        return False
+    if DTC_PATTERN.search(source):
+        return True
+    factual_markers = (
+        "не завод", "не запуск", "не едет", "не трог", "не тянет",
+        "глох", "троит", "вибрац", "стук", "шум", "гул", "теч",
+        "перегре", "горит", "ошиб", "чек", "рыв", "пина", "букс",
+        "слом", "заменил", "заменили", "поменял", "отремонт", "не может",
+        "переста", "только на холод", "только на горяч",
+        "does not", "doesn't", "won't", "stalls", "misfire", "vibrat",
+        "noise", "knock", "leak", "overheat", "warning", "replaced",
+        "repaired", "problem with", "проблема с",
+    )
+    return any(marker in lowered for marker in factual_markers)
 
 
 def classify_problem(text: str) -> str:
@@ -604,29 +649,16 @@ def extract_technical_events(
             }
         )
 
-    if has_automotive_content(
-        source
-    ):
-        details: dict[str, Any] = {
-            "source_text": source,
-        }
-
-        if str(
-            answer or ""
-        ).strip():
-            details[
-                "assistant_answer"
-            ] = str(
-                answer
-            ).strip()
-
+    if is_factual_technical_statement(source):
         events.append(
             {
                 "event_type": "SYMPTOM",
                 "title": classify_problem(
                     source
                 ),
-                "details": details,
+                "details": {
+                    "source_text": source[:500],
+                },
                 "source_kind": "USER",
             }
         )

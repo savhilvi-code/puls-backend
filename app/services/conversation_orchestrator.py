@@ -26,6 +26,8 @@ from app.services.v2_context import (
     extract_technical_events,
     extract_vehicle_label,
     has_automotive_content,
+    is_factual_technical_statement,
+    is_reference_request,
     is_social_general_text,
     looks_like_meta_question,
     plain_text_response,
@@ -216,6 +218,18 @@ def resolve_relevant_problem(
         ):
             return None
 
+        stored_class = str(
+            (problem or {}).get("problem_class") or "OTHER"
+        ).upper()
+        if (
+            problem
+            and problem_class not in {"OTHER", stored_class}
+            and stored_class not in {"", "OTHER"}
+        ):
+            return None
+        if problem and stored_class == "OTHER" and problem_class != "OTHER":
+            return None
+
         return problem
 
     candidates = repo.list_problems(
@@ -245,11 +259,15 @@ def resolve_relevant_problem(
     )
 
     if scored and scored[0][1] >= 2:
-        return scored[0][0]
+        best = scored[0][0]
+        stored_class = str(best.get("problem_class") or "OTHER").upper()
+        if stored_class == problem_class or problem_class == "OTHER":
+            return best
 
     if (
         symptom_has_operating_detail(symptom)
         and len(candidates) == 1
+        and problem_class == "OTHER"
     ):
         return candidates[0]
 
@@ -460,6 +478,114 @@ def _has_research_media_intent(text: str) -> bool:
     )
 
 
+def _search_trigger_type(text: str) -> str:
+    lowered = " ".join(str(text or "").lower().split())
+    howto_markers = (
+        "как заменить", "как поменять", "как снять", "как установить",
+        "how to replace", "how to change", "how to remove", "how to install",
+        "youtube", "ютуб", "видео", "video",
+    )
+    return "HOWTO" if any(marker in lowered for marker in howto_markers) else "REFERENCE"
+
+
+def _transmission_conflict(vehicle: dict[str, Any], text: str) -> bool:
+    stored = " ".join(str(vehicle.get("transmission") or "").lower().split())
+    lowered = " ".join(str(text or "").lower().split())
+    says_manual = any(marker in stored for marker in ("manual", "механ", "мкпп"))
+    says_automatic = any(
+        marker in lowered
+        for marker in ("акпп", "al4", "automatic", "автоматическ", "коробка автомат")
+    )
+    return says_manual and says_automatic
+
+
+def _transmission_conflict_answer(language: str) -> str:
+    if str(language or "").lower().startswith("ru"):
+        return (
+            "В карточке автомобиля указана механическая коробка, а в сообщении — АКПП/AL4. "
+            "Уточните фактический тип коробки и при необходимости явно исправьте карточку автомобиля; "
+            "до подтверждения я не буду менять сохранённую характеристику или смешивать эти данные."
+        )
+    return (
+        "The vehicle record says manual transmission, while the message refers to an automatic/AL4. "
+        "Please confirm the actual transmission and explicitly correct the vehicle record if needed; "
+        "until then I will not change or combine the conflicting data."
+    )
+
+
+def _reference_problem_payload(
+    *,
+    text: str,
+    vehicle: dict[str, Any],
+) -> dict[str, Any]:
+    title = f"{vehicle_label(vehicle)} Reference".strip()
+    return {
+        "title": title or text[:120],
+        "problem_class": "SERVICE_REFERENCE",
+        "status": "OPEN",
+        "symptoms": [],
+        "confirmed_facts": [],
+        "hypotheses": [],
+        "current_conclusion": "",
+        "next_step": "",
+        "mileage_start": vehicle.get("mileage"),
+    }
+
+
+def _associate_problem(
+    *,
+    user_id: str | None,
+    conversation_id: str | None,
+    vehicle: dict[str, Any],
+    problem: dict[str, Any],
+    response_context: dict[str, Any],
+) -> None:
+    problem_id = problem.get("id")
+    if not problem_id:
+        return
+    repo.associate_conversation_problem(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        vehicle_id=vehicle.get("id"),
+        problem_id=problem_id,
+    )
+    response_context.update({
+        "vehicle_id": vehicle.get("id"),
+        "problem_id": problem_id,
+    })
+
+
+def _save_user_message_and_events(
+    *,
+    user_id: str | None,
+    conversation_id: str | None,
+    vehicle: dict[str, Any],
+    problem: dict[str, Any],
+    text: str,
+    language: str,
+) -> dict[str, Any] | None:
+    saved = repo.save_message(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        vehicle_id=vehicle.get("id"),
+        problem_id=problem.get("id"),
+        role="user",
+        text=text,
+        language=language,
+    )
+    for event in extract_technical_events(text):
+        payload = dict(event)
+        if (saved or {}).get("id"):
+            payload["source_message_id"] = saved["id"]
+        repo.create_vehicle_event(
+            user_id=user_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=problem.get("id"),
+            payload=payload,
+        )
+    return saved
+
+
 def _problem_payload(
     *,
     symptom: str,
@@ -653,19 +779,18 @@ async def process_chat_message_v2(
         )
     )
 
+    reference_request = is_reference_request(text)
     problem_class = classify_problem(text)
 
-    problem = resolve_relevant_problem(
-        user_id=user.id,
-        vehicle_id=(
-            vehicle or {}
-        ).get("id"),
-        explicit_problem_id=(
-            explicit_problem_id
-        ),
-        problem_class=problem_class,
-        symptom=text,
-    )
+    problem = None
+    if mode == "AUTOMOTIVE" and not reference_request:
+        problem = resolve_relevant_problem(
+            user_id=user.id,
+            vehicle_id=(vehicle or {}).get("id"),
+            explicit_problem_id=explicit_problem_id,
+            problem_class=problem_class,
+            symptom=text,
+        )
 
     conversation = (
         repo.get_or_create_conversation(
@@ -684,6 +809,28 @@ async def process_chat_message_v2(
     conversation_id = (
         conversation or {}
     ).get("id")
+
+    # The existing Conversation is itself canonical context. A clarification
+    # may omit problem_id in the request while still belonging to its Problem.
+    if (
+        mode == "AUTOMOTIVE"
+        and not reference_request
+        and problem is None
+        and (conversation or {}).get("problem_id")
+    ):
+        conversation_problem = repo.get_problem(
+            user_id=user.id,
+            problem_id=conversation.get("problem_id"),
+        )
+        if (
+            conversation_problem
+            and str(conversation_problem.get("vehicle_id")) == str((vehicle or {}).get("id"))
+            and (
+                str(conversation_problem.get("problem_class") or "").upper() == problem_class
+                or symptom_has_operating_detail(text)
+            )
+        ):
+            problem = conversation_problem
 
     response_context = {
         "conversation_id": conversation_id,
@@ -863,6 +1010,132 @@ async def process_chat_message_v2(
             ),
         )
 
+    # A stored manual transmission and an automatic/AL4 report are mutually
+    # inconsistent. Preserve the canonical vehicle record and clarify first.
+    if (
+        not reference_request
+        and is_factual_technical_statement(text)
+        and _transmission_conflict(vehicle, text)
+    ):
+        answer = _transmission_conflict_answer(language)
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=None,
+            role="user",
+            text=text,
+            language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=None,
+            role="assistant",
+            text=answer,
+            language=language,
+        )
+        return ChatResponse(**response_context,
+            answer=answer,
+            links=[],
+            quota=quota_payload(subscription),
+        )
+
+    # Vehicle-aware chat that establishes no technical fact stays raw.
+    if not reference_request and not is_factual_technical_statement(text):
+        context.problem = None
+        answer = plain_text_response(
+            await _natural_reply(
+                context,
+                recent_messages=recent_messages,
+                fallback=_natural_fallback("GENERAL", language),
+            )
+        )
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=None,
+            role="user",
+            text=text,
+            language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=None,
+            role="assistant",
+            text=answer,
+            language=language,
+        )
+        return ChatResponse(**response_context,
+            answer=answer,
+            links=[],
+            quota=quota_payload(subscription),
+        )
+
+    # HOWTO/REFERENCE may use the vehicle, but never the active diagnostic
+    # Problem. A separate reference owner is required by the frozen Search FK.
+    if reference_request:
+        reference_problem = resolve_relevant_problem(
+            user_id=user.id,
+            vehicle_id=vehicle.get("id"),
+            explicit_problem_id=None,
+            problem_class="SERVICE_REFERENCE",
+            symptom=text,
+        )
+        if reference_problem is None:
+            reference_problem = repo.save_problem(
+                user_id=user.id,
+                vehicle_id=vehicle.get("id"),
+                payload=_reference_problem_payload(text=text, vehicle=vehicle),
+            )
+
+        research = await run_search_stages(
+            user_id=user.id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=(reference_problem or {}).get("id"),
+            conversation_id=conversation_id,
+            trigger_type=_search_trigger_type(text),
+            vehicle_label=vehicle_label(vehicle),
+            query=text,
+            language=language,
+        )
+        answer = plain_text_response(
+            _format_research_answer(
+                language,
+                summary=research.summary,
+                links=research.links,
+                evidence=getattr(research, "evidence", {}),
+                sufficient=research.sufficient,
+            )
+        )
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=None,
+            role="user",
+            text=text,
+            language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=None,
+            role="assistant",
+            text=answer,
+            language=language,
+        )
+        return ChatResponse(**response_context,
+            answer=answer,
+            links=research.links,
+            quota=quota_payload(research.quota or subscription),
+        )
+
     # ---------------------------------------------------------------
     # Initial symptom without enough operating detail.
     # ---------------------------------------------------------------
@@ -890,18 +1163,13 @@ async def process_chat_message_v2(
         )
 
         context.problem = problem
-
-        for event in extract_technical_events(
-            text
-        ):
-            repo.create_vehicle_event(
-                user_id=user.id,
-                vehicle_id=vehicle.get("id"),
-                problem_id=(
-                    problem or {}
-                ).get("id"),
-                payload=event,
-            )
+        _associate_problem(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle=vehicle,
+            problem=problem or {},
+            response_context=response_context,
+        )
 
         answer = plain_text_response(
             await _natural_reply(
@@ -912,14 +1180,11 @@ async def process_chat_message_v2(
             )
         )
 
-        repo.save_message(
+        _save_user_message_and_events(
             user_id=user.id,
             conversation_id=conversation_id,
-            vehicle_id=vehicle.get("id"),
-            problem_id=(
-                problem or {}
-            ).get("id"),
-            role="user",
+            vehicle=vehicle,
+            problem=problem or {},
             text=text,
             language=message_language,
         )
@@ -947,6 +1212,8 @@ async def process_chat_message_v2(
     # ---------------------------------------------------------------
     # Create or update active diagnostic problem.
     # ---------------------------------------------------------------
+
+    problem_was_existing = problem is not None
 
     if problem is None:
         problem = repo.save_problem(
@@ -994,6 +1261,14 @@ async def process_chat_message_v2(
             problem = updated_problem
             context.problem = problem
 
+    _associate_problem(
+        user_id=user.id,
+        conversation_id=conversation_id,
+        vehicle=vehicle,
+        problem=problem or {},
+        response_context=response_context,
+    )
+
     # ---------------------------------------------------------------
     # Internal PULS knowledge.
     # ---------------------------------------------------------------
@@ -1012,27 +1287,11 @@ async def process_chat_message_v2(
             )
         )
 
-        for event in extract_technical_events(
-            text,
-            answer=answer,
-        ):
-            repo.create_vehicle_event(
-                user_id=user.id,
-                vehicle_id=vehicle.get("id"),
-                problem_id=(
-                    problem or {}
-                ).get("id"),
-                payload=event,
-            )
-
-        repo.save_message(
+        _save_user_message_and_events(
             user_id=user.id,
             conversation_id=conversation_id,
-            vehicle_id=vehicle.get("id"),
-            problem_id=(
-                problem or {}
-            ).get("id"),
-            role="user",
+            vehicle=vehicle,
+            problem=problem or {},
             text=text,
             language=message_language,
         )
@@ -1072,6 +1331,12 @@ async def process_chat_message_v2(
         ),
         query=text,
         language=language,
+        conversation_id=conversation_id,
+        trigger_type="DIAGNOSTIC",
+        prefer_existing=(
+            problem_was_existing
+            and symptom_has_operating_detail(text)
+        ),
     )
 
     answer = plain_text_response(
@@ -1102,27 +1367,11 @@ async def process_chat_message_v2(
             problem = updated_problem
             context.problem = problem
 
-    for event in extract_technical_events(
-        text,
-        answer=answer,
-    ):
-        repo.create_vehicle_event(
-            user_id=user.id,
-            vehicle_id=vehicle.get("id"),
-            problem_id=(
-                problem or {}
-            ).get("id"),
-            payload=event,
-        )
-
-    repo.save_message(
+    _save_user_message_and_events(
         user_id=user.id,
         conversation_id=conversation_id,
-        vehicle_id=vehicle.get("id"),
-        problem_id=(
-            problem or {}
-        ).get("id"),
-        role="user",
+        vehicle=vehicle,
+        problem=problem or {},
         text=text,
         language=message_language,
     )

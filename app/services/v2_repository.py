@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlunparse
 
@@ -100,6 +101,22 @@ def _source_domain(url: str) -> str:
         return urlparse(url).netloc.lower()
     except Exception:
         return ""
+
+
+_VALUE_UNIT_PATTERN = re.compile(
+    r"^\s*([-+]?\d+(?:[.,]\d+)?)\s*(cm[³3]|cc|l|kw|hp|ps|nm|rpm|bar|psi|v|a|°c|mm|cm|m|kg|km|mi|%)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_value_unit(value: Any, unit: Any) -> tuple[Any, Any]:
+    """Split a numeric value only when an explicit, known unit is present."""
+    if unit not in (None, "") or not isinstance(value, str):
+        return value, unit
+    match = _VALUE_UNIT_PATTERN.match(value)
+    if not match:
+        return value, unit
+    return match.group(1).replace(",", "."), match.group(2)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +388,10 @@ def upsert_vehicle_specs(
                 "updated_at": now_iso(),
             }
 
+            data["actual_value"], data["actual_unit"] = _normalize_value_unit(
+                data["actual_value"], None,
+            )
+
             if existing:
                 saved = _one(
                     client.table("vehicle_specs")
@@ -427,6 +448,15 @@ def upsert_vehicle_specs(
     data["vehicle_id"] = vehicle_id
     data["parameter_key"] = parameter_key
     data["updated_at"] = now_iso()
+
+    for value_key, unit_key in (
+        ("actual_value", "actual_unit"),
+        ("recommended_value", "recommended_unit"),
+    ):
+        if value_key in data:
+            data[value_key], data[unit_key] = _normalize_value_unit(
+                data.get(value_key), data.get(unit_key),
+            )
 
     if existing:
         response = (
@@ -524,6 +554,34 @@ def get_or_create_conversation(
         )
 
     return created
+
+
+def associate_conversation_problem(
+    *,
+    user_id: Uuid | None,
+    conversation_id: Uuid | None,
+    vehicle_id: Uuid | None,
+    problem_id: Uuid | None,
+) -> dict[str, Any] | None:
+    """Attach an existing owned conversation to an owned Problem."""
+    if user_id is None or conversation_id is None or problem_id is None:
+        return None
+    problem = get_problem(user_id=user_id, problem_id=problem_id)
+    if not problem or str(problem.get("vehicle_id")) != str(vehicle_id):
+        return None
+    return _one(
+        get_supabase_client()
+        .table("conversations")
+        .update({
+            "vehicle_id": vehicle_id,
+            "problem_id": problem_id,
+            "conversation_type": "DIAGNOSTIC",
+            "updated_at": now_iso(),
+        })
+        .eq("id", conversation_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
 
 
 def save_message(
@@ -953,6 +1011,8 @@ def create_search_episode(
     vehicle_id: Uuid | None,
     problem_id: Uuid | None,
     reason: str,
+    conversation_id: Uuid | None = None,
+    trigger_type: str = "DIAGNOSTIC",
 ) -> dict[str, Any] | None:
     if user_id is None or problem_id is None:
         return None
@@ -975,9 +1035,10 @@ def create_search_episode(
 
     payload = {
         "problem_id": problem_id,
+        "conversation_id": conversation_id,
         "status": "RUNNING",
         "current_stage": 1,
-        "trigger_type": "DIAGNOSTIC",
+        "trigger_type": str(trigger_type or "DIAGNOSTIC").upper(),
         "search_context": {
             "reason": reason,
             "vehicle_id": (
@@ -1384,8 +1445,25 @@ def link_problem_source(
         },
     }
 
+    client = get_supabase_client()
+    existing = _one(
+        client.table("problem_sources")
+        .select("id")
+        .eq("problem_id", problem_id)
+        .eq("source_id", source_id)
+        .limit(1)
+        .execute()
+    )
+    if existing:
+        return _one(
+            client.table("problem_sources")
+            .update(_clean_payload(payload))
+            .eq("id", existing["id"])
+            .execute()
+        )
+
     return _one(
-        get_supabase_client()
+        client
         .table("problem_sources")
         .insert(_clean_payload(payload))
         .execute()

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.services import conversation_orchestrator as core
+from app.services import v2_context
 
 USER_ID = "11111111-1111-4111-8111-111111111111"
 VEHICLE_ID = "22222222-2222-4222-8222-222222222222"
@@ -29,6 +30,27 @@ def _problem(problem_id=PROBLEM_ID):
 
 
 class BackendV2ConversationTests(unittest.TestCase):
+    def test_reference_request_is_not_a_symptom_event(self):
+        self.assertEqual(
+            v2_context.extract_technical_events("дай видео как заменить масло"),
+            [],
+        )
+
+    def test_transmission_clarification_reuses_single_problem(self):
+        transmission = {
+            **_problem(),
+            "problem_class": "TRANSMISSION",
+            "title": "Automatic transmission fault",
+        }
+        with patch.object(core.repo, "list_problems", return_value=[transmission]):
+            resolved = core.resolve_relevant_problem(
+                user_id=USER_ID,
+                vehicle_id=VEHICLE_ID,
+                explicit_problem_id=None,
+                problem_class="OTHER",
+                symptom="на холодную едет, а на горячую не трогается",
+            )
+        self.assertEqual(resolved["id"], PROBLEM_ID)
     def test_structured_evidence_and_links_survive_empty_summary(self):
         answer = core._format_research_answer(
             "ru",
@@ -56,7 +78,8 @@ class BackendV2ConversationTests(unittest.TestCase):
             "latest_problem": stack.enter_context(patch.object(core, "_latest_problem_for_context", return_value=latest_problem)),
             "resolve_problem": stack.enter_context(patch.object(core, "resolve_relevant_problem", return_value=problem)),
             "conversation": stack.enter_context(patch.object(core.repo, "get_or_create_conversation", return_value={"id": CONVERSATION_ID})),
-            "save_message": stack.enter_context(patch.object(core.repo, "save_message")),
+            "associate": stack.enter_context(patch.object(core.repo, "associate_conversation_problem")),
+            "save_message": stack.enter_context(patch.object(core.repo, "save_message", return_value={"id": "message-1"})),
             "save_problem": stack.enter_context(patch.object(core.repo, "save_problem", return_value=problem or _problem())),
             "event": stack.enter_context(patch.object(core.repo, "create_vehicle_event")),
             "knowledge": stack.enter_context(patch.object(core.repo, "find_relevant_knowledge", return_value=knowledge or [])),
@@ -117,6 +140,11 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIn("Where is the noise", response.answer)
         mocks["save_problem"].assert_called_once()
         mocks["event"].assert_called()
+        self.assertEqual(
+            mocks["event"].call_args.kwargs["payload"]["source_message_id"],
+            "message-1",
+        )
+        mocks["associate"].assert_called_once()
         mocks["research"].assert_not_called()
 
     def test_internal_knowledge_answers_without_external_research(self):

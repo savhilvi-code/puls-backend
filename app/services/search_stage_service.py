@@ -423,6 +423,9 @@ async def run_search_stages(
     vehicle_label: str,
     query: str,
     language: str,
+    conversation_id: str | None = None,
+    trigger_type: str = "DIAGNOSTIC",
+    prefer_existing: bool = False,
     max_stages: int = 3,
     runner: StageRunner = parse_diagnostic,
 ) -> ResearchResult:
@@ -450,12 +453,17 @@ async def run_search_stages(
         if (
             isinstance(persisted, dict)
             and persisted.get("episode")
-            and _is_persisted_continuation(query, persisted)
+            and (
+                prefer_existing
+                or _is_persisted_continuation(query, persisted)
+            )
         ):
-            return _result_from_persisted_research(
+            reused = _result_from_persisted_research(
                 persisted,
                 quota=subscription,
             )
+            if reused.summary or reused.links or any(reused.evidence.values()):
+                return reused
 
     if not can_run:
         return ResearchResult(
@@ -468,6 +476,8 @@ async def run_search_stages(
         vehicle_id=vehicle_id,
         problem_id=problem_id,
         reason=query,
+        conversation_id=conversation_id,
+        trigger_type=trigger_type,
     )
 
     episode_id = (
