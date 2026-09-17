@@ -1,5 +1,12 @@
 # Task Log
 
+## 2026-09-17 — Admin Data Inspector Block 2
+
+- Repaired the inspector against the production V2 write contract rather than the stale SQL reference: conversations use `context/started_at`, vehicles use `make/engine_code`, messages use `content/metadata`, events use `event_date/details/source_kind`, sources use `url`, and problem-source evidence uses the current canonical row shape.
+- Auxiliary user/vehicle/problem/source/knowledge lookups are now best-effort. A failed relation produces a warning while keeping primary canonical rows visible. Inspector path IDs accept production UUIDs.
+- Overview now returns independent real metrics, distributions, recent activity and Data Flow counts. Any failed count remains `null`/ERROR instead of becoming a false zero. Problem Trace follows only stored relations and uses current V2 timestamp/relationship fields.
+- No schema, RLS, conversation lifecycle, Intelligence, Search/Parser, quota, subscription or chat behavior changed.
+
 ## 2026-09-17 — Admin Knowledge Base Data Inspector V1
 
 - Added authenticated, read-only `/admin/knowledge/*` endpoints over the existing canonical V2 tables. List endpoints are bounded and paginated; messages load by expanded conversation, search runs load by expanded episode, and Problem Trace resolves only existing relations.

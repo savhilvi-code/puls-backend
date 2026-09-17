@@ -67,3 +67,5 @@ The Supabase service-role key is server-only and read from server environment va
 ## Admin Data Inspector
 
 `/admin/knowledge/*` is a read-only observability API for canonical V2 data. Every route reuses `admin_accounts` authorization. Parent lists are paginated; conversation messages, search runs, and Problem Trace are loaded through parent-scoped endpoints so the browser never queries privileged Supabase tables directly or downloads the full dataset at startup.
+
+Dashboard counts and distributions are calculated independently so one unavailable table or auxiliary relation does not hide otherwise readable canonical data. Unavailable metrics are returned as `null` with an error map; the frontend must distinguish that state from a real zero.

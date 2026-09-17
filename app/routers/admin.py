@@ -58,7 +58,7 @@ async def admin_knowledge_conversations(
 
 @router.get("/knowledge/conversations/{conversation_id}/messages")
 async def admin_knowledge_conversation_messages(
-    conversation_id: int, request: Request, limit: int = 100, offset: int = 0,
+    conversation_id: str, request: Request, limit: int = 100, offset: int = 0,
 ) -> dict[str, Any]:
     require_admin(request)
     return list_conversation_messages(conversation_id, limit=limit, offset=offset)
@@ -78,7 +78,7 @@ async def admin_knowledge_problems(
 
 
 @router.get("/knowledge/problems/{problem_id}/trace")
-async def admin_knowledge_problem_trace(problem_id: int, request: Request) -> dict[str, Any]:
+async def admin_knowledge_problem_trace(problem_id: str, request: Request) -> dict[str, Any]:
     require_admin(request)
     return get_problem_trace(problem_id)
 
@@ -105,7 +105,7 @@ async def admin_knowledge_search_episodes(
 
 @router.get("/knowledge/search-episodes/{episode_id}/runs")
 async def admin_knowledge_search_runs(
-    episode_id: int, request: Request, limit: int = 50, offset: int = 0,
+    episode_id: str, request: Request, limit: int = 50, offset: int = 0,
 ) -> dict[str, Any]:
     require_admin(request)
     return list_search_runs(episode_id, limit=limit, offset=offset)
