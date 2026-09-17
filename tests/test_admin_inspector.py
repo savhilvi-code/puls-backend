@@ -45,6 +45,78 @@ class AdminInspectorTests(unittest.TestCase):
             "00000000-0000-4000-8000-000000000042", limit=100, offset=0
         )
 
+    def test_vehicle_specs_are_exposed_through_scoped_endpoint(self):
+        with patch.object(admin, "require_admin", return_value="admin-id"), patch.object(
+            admin,
+            "list_vehicle_specs",
+            return_value={"items": [], "total": 0, "limit": 100, "offset": 0},
+        ) as specs:
+            asyncio.run(
+                admin.admin_knowledge_vehicle_specs(
+                    "00000000-0000-4000-8000-000000000043", object(), limit=100, offset=0
+                )
+            )
+
+        specs.assert_called_once_with(
+            "00000000-0000-4000-8000-000000000043", limit=100, offset=0
+        )
+
+    def test_filtered_count_selects_before_applying_filter(self):
+        calls = []
+
+        class Response:
+            count = 7
+            data = []
+
+        class SelectedQuery:
+            def eq(self, column, value):
+                calls.append(("eq", column, value))
+                return self
+
+            def limit(self, value):
+                calls.append(("limit", value))
+                return self
+
+            def execute(self):
+                return Response()
+
+        class TableQuery:
+            def select(self, column, *, count):
+                calls.append(("select", column, count))
+                return SelectedQuery()
+
+        class Client:
+            def table(self, table):
+                calls.append(("table", table))
+                return TableQuery()
+
+        with patch.object(admin_inspector_service, "get_supabase_client", return_value=Client()):
+            result = admin_inspector_service._count_filtered("messages", "conversation_id", ["c1"])
+
+        self.assertEqual(result, 7)
+        self.assertEqual(calls[:3], [
+            ("table", "messages"),
+            ("select", "id", "exact"),
+            ("eq", "conversation_id", "c1"),
+        ])
+
+    def test_vehicle_list_adds_owner_and_relation_counts(self):
+        page = {
+            "items": [{"id": "v1", "user_id": "u1", "make": "Peugeot"}],
+            "total": 1, "limit": 25, "offset": 0, "warnings": [],
+        }
+        with patch.object(admin_inspector_service, "_list_rows", return_value=page), patch.object(
+            admin_inspector_service, "_lookup_optional", return_value=({"u1": {"email": "owner@test"}}, None)
+        ), patch.object(admin_inspector_service, "_count_filtered", side_effect=[2, 3, 4]):
+            result = admin_inspector_service.list_vehicles(
+                limit=25, offset=0, lifecycle_status=None, search="Peugeot"
+            )
+
+        self.assertEqual(result["items"][0]["user"]["email"], "owner@test")
+        self.assertEqual(result["items"][0]["spec_count"], 2)
+        self.assertEqual(result["items"][0]["problem_count"], 3)
+        self.assertEqual(result["items"][0]["event_count"], 4)
+
     def test_pagination_is_bounded(self):
         self.assertEqual(admin_inspector_service._safe_page(0, -5), (1, 0))
         self.assertEqual(admin_inspector_service._safe_page(1000, 12), (100, 12))

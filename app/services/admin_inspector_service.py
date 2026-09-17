@@ -57,9 +57,11 @@ def _count_table(table: str) -> int:
 
 def _count_filtered(table: str, column: str, values: Iterable[str]) -> int:
     values = list(values)
-    query = get_supabase_client().table(table)
+    query = get_supabase_client().table(table).select("id", count="exact")
     query = query.eq(column, values[0]) if len(values) == 1 else query.in_(column, values)
-    return _count_query(query, f"Failed to count {table} by {column}.")
+    response = _execute(query.limit(1), f"Failed to count {table} by {column}.")
+    count = getattr(response, "count", None)
+    return int(count) if count is not None else len(rows(response))
 
 
 def _recent_rows(
@@ -308,6 +310,49 @@ def list_conversation_messages(
     return _list_rows(
         "messages", limit=limit, offset=offset, order_by="created_at",
         order_desc=False, filters={"conversation_id": conversation_id},
+    )
+
+
+def list_vehicles(
+    *, limit: int, offset: int, lifecycle_status: str | None, search: str | None,
+) -> dict[str, Any]:
+    page = _list_rows(
+        "vehicles", limit=limit, offset=offset, order_by="updated_at",
+        filters={"lifecycle_status": lifecycle_status}, search_column="make", search=search,
+    )
+    users, user_error = _lookup_optional(
+        "users", _unique_ids(page["items"], "user_id"), label="user"
+    )
+    if user_error:
+        page["warnings"].append(user_error)
+
+    related_tables = {
+        "spec_count": "vehicle_specs",
+        "problem_count": "problems",
+        "event_count": "vehicle_events",
+    }
+    for item in page["items"]:
+        item["user"] = users.get(str(item.get("user_id")))
+        for field, table in related_tables.items():
+            count, error = _optional(
+                lambda item=item, table=table: _count_filtered(
+                    table, "vehicle_id", [str(item.get("id"))]
+                ),
+                f"{table} for vehicle {item.get('id')}",
+            )
+            item[field] = count
+            if error:
+                page["warnings"].append(error)
+    page["warnings"] = list(dict.fromkeys(page["warnings"]))
+    return page
+
+
+def list_vehicle_specs(
+    vehicle_id: str, *, limit: int, offset: int,
+) -> dict[str, Any]:
+    return _list_rows(
+        "vehicle_specs", limit=limit, offset=offset, order_by="created_at",
+        order_desc=False, filters={"vehicle_id": vehicle_id},
     )
 
 

@@ -28,6 +28,8 @@ from app.services.admin_inspector_service import (
     list_search_runs,
     list_sources,
     list_vehicle_events,
+    list_vehicle_specs,
+    list_vehicles,
 )
 
 
@@ -62,6 +64,25 @@ async def admin_knowledge_conversation_messages(
 ) -> dict[str, Any]:
     require_admin(request)
     return list_conversation_messages(conversation_id, limit=limit, offset=offset)
+
+
+@router.get("/knowledge/vehicles")
+async def admin_knowledge_vehicles(
+    request: Request, limit: int = 25, offset: int = 0,
+    lifecycle_status: str | None = None, q: str | None = None,
+) -> dict[str, Any]:
+    require_admin(request)
+    return list_vehicles(
+        limit=limit, offset=offset, lifecycle_status=lifecycle_status, search=q,
+    )
+
+
+@router.get("/knowledge/vehicles/{vehicle_id}/specs")
+async def admin_knowledge_vehicle_specs(
+    vehicle_id: str, request: Request, limit: int = 100, offset: int = 0,
+) -> dict[str, Any]:
+    require_admin(request)
+    return list_vehicle_specs(vehicle_id, limit=limit, offset=offset)
 
 
 @router.get("/knowledge/problems")
