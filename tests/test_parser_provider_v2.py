@@ -31,7 +31,7 @@ def _parser_payload(summary: str = "diagnosis") -> dict:
 
 
 class ParserProviderV2Tests(unittest.TestCase):
-    def test_openai_provider_uses_expanded_context_size_for_expanded_stage(self):
+    def test_openai_provider_uses_deep_context_size_for_deep_stage(self):
         captured = {}
 
         def fake_openai_search(client, data, user_message, domains, *, system_prompt):
@@ -45,7 +45,7 @@ class ParserProviderV2Tests(unittest.TestCase):
             patch.object(search_provider, "run_claude_search") as claude_call,
         ):
             result = search_provider.run_search_provider(
-                data=_request(mode="expanded"),
+                data=_request(mode="deep"),
                 user_message="message",
                 allowed_domains=["example.com"],
                 fallback_domains=[],
@@ -56,7 +56,7 @@ class ParserProviderV2Tests(unittest.TestCase):
             )
 
         self.assertEqual(result["summary"], "openai ok")
-        self.assertEqual(captured["mode"], "expanded")
+        self.assertEqual(captured["mode"], "deep")
         openai_call.assert_called_once()
         claude_call.assert_not_called()
 
@@ -77,7 +77,11 @@ class ParserProviderV2Tests(unittest.TestCase):
 
         self.assertEqual(
             set(result.keys()),
-            {"forums_found", "links", "extracted_cases", "parser_summary", "topics_found", "_raw"},
+            {
+                "forums_found", "links", "extracted_cases", "parser_summary", "topics_found",
+                "common_causes", "solutions", "unlikely_causes", "regional_insights",
+                "recommendation", "need_more_info", "clarifying_question", "sufficient_evidence", "_raw",
+            },
         )
         self.assertEqual(result["parser_summary"], "contract ok")
         self.assertEqual(result["links"][0]["url"], "https://example.com/thread")
@@ -100,6 +104,34 @@ class ParserProviderV2Tests(unittest.TestCase):
         self.assertIn("evidence_context", captured)
         self.assertNotIn("conversation" + "_history", captured)
         provider_call.assert_not_called()
+
+    def test_partial_remote_evidence_does_not_trigger_second_provider_call(self):
+        partial = _parser_payload("")
+        partial["error"] = "remote response was incomplete"
+
+        with (
+            patch.object(parser_engine, "_remote_parser_url", return_value="https://remote.example/search"),
+            patch.object(parser_engine, "_call_remote_parser", new=AsyncMock(return_value=partial)),
+            patch.object(parser_engine, "run_search_provider") as provider_call,
+        ):
+            result = asyncio.run(parser_engine.diagnose(_request()))
+
+        self.assertNotIn("error", result)
+        self.assertTrue(result["_meta"]["partial_result_recovered"])
+        provider_call.assert_not_called()
+
+    def test_video_and_image_hints_are_intent_driven(self):
+        ordinary = parser_engine._build_search_hints(_request())
+        video = parser_engine._build_search_hints(
+            DiagnosticRequest(query="Покажи видео как заменить соленоид", lang="ru")
+        )
+        image = parser_engine._build_search_hints(
+            DiagnosticRequest(query="Покажи схему расположения соленоида", lang="ru")
+        )
+
+        self.assertFalse(any("YouTube" in hint for hint in ordinary))
+        self.assertTrue(any("YouTube" in hint for hint in video))
+        self.assertTrue(any("visual material" in hint for hint in image))
 
 
 if __name__ == "__main__":

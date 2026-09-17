@@ -471,7 +471,7 @@ def _merge_embedded_json_payload(data: dict) -> dict:
 
 async def parse_diagnostic(router_json: dict) -> dict:
     mode = str(router_json.get("mode") or "normal").strip().lower()
-    if mode not in {"normal", "expanded"}:
+    if mode not in {"normal", "deep"}:
         mode = "normal"
     query = str(
         router_json.get("query")
@@ -539,5 +539,13 @@ async def parse_diagnostic(router_json: dict) -> dict:
         "extracted_cases": normalized_cases,
         "parser_summary": parser_summary,
         "topics_found": filtered_topics,
+        "common_causes": data.get("common_causes") if isinstance(data.get("common_causes"), list) else [],
+        "solutions": data.get("solutions") if isinstance(data.get("solutions"), list) else [],
+        "unlikely_causes": data.get("unlikely_causes") if isinstance(data.get("unlikely_causes"), list) else [],
+        "regional_insights": data.get("regional_insights") if isinstance(data.get("regional_insights"), dict) else {},
+        "recommendation": str(data.get("recommendation") or "").strip(),
+        "need_more_info": bool(data.get("need_more_info")),
+        "clarifying_question": str(data.get("clarifying_question") or "").strip(),
+        "sufficient_evidence": data.get("sufficient_evidence") is True,
         "_raw": data,
     }

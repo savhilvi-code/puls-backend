@@ -65,7 +65,7 @@ def unique_domains(domains: list[str]) -> list[str]:
 
 
 def run_claude_search(client, data: DiagnosticRequest, user_message: str, domains: list[str], *, system_prompt: str):
-    expanded = data.mode.lower() == "expanded"
+    expanded = data.mode.lower() == "deep"
     return client.messages.create(
         model=get_claude_search_model(),
         max_tokens=5000 if expanded else 4000,
@@ -83,7 +83,7 @@ def run_claude_search(client, data: DiagnosticRequest, user_message: str, domain
 
 
 def run_openai_search(client, data: DiagnosticRequest, user_message: str, domains: list[str], *, system_prompt: str):
-    expanded = data.mode.lower() == "expanded"
+    expanded = data.mode.lower() == "deep"
     return client.responses.create(
         model=get_openai_search_model(),
         instructions=system_prompt,

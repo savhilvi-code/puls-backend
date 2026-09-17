@@ -14,6 +14,7 @@ from app.services.openai_service import (
     generate_natural_chat_reply,
 )
 from app.services.search_stage_service import run_search_stages
+from app.services.formatter_service import format_technical_answer
 from app.services.subscription_service import (
     ensure_user_subscription,
     quota_payload,
@@ -360,75 +361,102 @@ def _format_research_answer(
     *,
     summary: str,
     links: list[dict[str, Any]],
+    evidence: dict[str, Any],
     sufficient: bool,
 ) -> str:
     ru = str(
         language or ""
     ).lower().startswith("ru")
 
-    if not summary:
-        if ru:
-            return (
-                "Я запустил исследование, но надежных "
-                "подтверждений пока недостаточно. Лучше "
-                "уточнить симптом или условия проявления."
-            )
+    evidence = evidence if isinstance(evidence, dict) else {}
 
-        return (
-            "I ran the research stage, but there is not "
-            "enough reliable evidence yet. It would be "
-            "better to narrow the symptom or operating "
-            "conditions."
+    def text_values(items: Any, *keys: str) -> list[str]:
+        values: list[str] = []
+        for item in items if isinstance(items, list) else []:
+            if isinstance(item, dict):
+                value = " — ".join(
+                    str(item.get(key) or "").strip()
+                    for key in keys
+                    if str(item.get(key) or "").strip()
+                )
+            else:
+                value = str(item or "").strip()
+            if value:
+                values.append(value)
+        return values
+
+    cases = evidence.get("extracted_cases")
+    probable = text_values(evidence.get("common_causes"), "cause")
+    probable.extend(text_values(cases, "cause"))
+    checks = text_values(evidence.get("solutions"), "title", "description")
+    checks.extend(text_values(cases, "solution"))
+    less_likely = text_values(evidence.get("unlikely_causes"))
+    regional = evidence.get("regional_insights")
+    findings = [
+        str(value).strip()
+        for value in (regional.values() if isinstance(regional, dict) else [])
+        if str(value or "").strip()
+    ]
+
+    diagnosis = str(
+        summary
+        or evidence.get("recommendation")
+        or (probable[0] if probable else "")
+        or (checks[0] if checks else "")
+    ).strip()
+    if not diagnosis and links:
+        diagnosis = (
+            "Найдены релевантные материалы, но подтверждённого вывода в них пока недостаточно."
+            if ru
+            else "Relevant materials were found, but they do not yet support a confirmed conclusion."
+        )
+    if not diagnosis:
+        diagnosis = (
+            "Надёжных подтверждений пока недостаточно."
+            if ru
+            else "There is not enough reliable evidence yet."
         )
 
-    prefix = (
-        "По найденным источникам:"
-        if ru
-        else "Based on the evidence found:"
+    limitations = ""
+    if not sufficient:
+        limitations = (
+            "Вывод предварительный: доказательств недостаточно."
+            if ru
+            else "The conclusion is preliminary because evidence is limited."
+        )
+    question = str(evidence.get("clarifying_question") or "").strip()
+
+    return format_technical_answer(
+        language=language,
+        diagnosis=diagnosis,
+        probable_causes=probable,
+        first_checks=checks,
+        less_likely=less_likely,
+        additional_findings=findings,
+        limitations=limitations,
+        links=links,
+        question_tail=question,
     )
 
-    if sufficient:
-        confidence = (
-            "Этого достаточно для следующего шага."
-            if ru
-            else "This is enough for the next step."
+
+def _has_research_media_intent(text: str) -> bool:
+    lowered = " ".join(str(text or "").lower().split())
+    return any(
+        marker in lowered
+        for marker in (
+            "youtube",
+            "ютуб",
+            "видео",
+            "video",
+            "покажи фото",
+            "покажи изображение",
+            "покажи схему",
+            "как выглядит",
+            "где находится",
+            "image",
+            "photo",
+            "diagram",
         )
-    else:
-        confidence = (
-            "Подтверждений пока недостаточно."
-            if ru
-            else "Evidence is still limited."
-        )
-
-    source_lines = []
-
-    for item in links[:4]:
-        url = str(
-            item.get("url") or ""
-        ).strip()
-
-        if not url:
-            continue
-
-        title = str(
-            item.get("title") or url
-        ).strip()
-
-        source_lines.append(
-            f"{title}: {url}"
-        )
-
-    source_text = ""
-
-    if source_lines:
-        source_text = (
-            "\n\n"
-            + "\n".join(source_lines)
-        )
-
-    return (
-        f"{prefix} {summary}\n\n"
-        f"{confidence}{source_text}"
     )
 
 
@@ -608,7 +636,10 @@ async def process_chat_message_v2(
     if looks_like_meta_question(text):
         mode = "META_CHAT"
 
-    elif has_automotive_content(text):
+    elif has_automotive_content(text) or (
+        _has_research_media_intent(text)
+        and (explicit_problem_id or explicit_vehicle_id)
+    ):
         mode = "AUTOMOTIVE"
 
     vehicle, ambiguous_vehicle = (
@@ -1048,6 +1079,7 @@ async def process_chat_message_v2(
             language,
             summary=research.summary,
             links=research.links,
+            evidence=getattr(research, "evidence", {}),
             sufficient=research.sufficient,
         )
     )

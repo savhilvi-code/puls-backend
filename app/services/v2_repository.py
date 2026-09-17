@@ -1417,6 +1417,52 @@ def list_problem_sources(
     )
 
 
+def get_latest_problem_research(
+    *,
+    user_id: Uuid | None,
+    problem_id: Uuid | None,
+) -> dict[str, Any] | None:
+    """Return the latest persisted research state for an owned problem."""
+    if user_id is None or problem_id is None:
+        return None
+
+    if not get_problem(
+        user_id=user_id,
+        problem_id=problem_id,
+    ):
+        return None
+
+    client = get_supabase_client()
+    episode = _one(
+        client.table("search_episodes")
+        .select("*")
+        .eq("problem_id", problem_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not episode:
+        return None
+
+    runs = rows(
+        client.table("search_runs")
+        .select("*")
+        .eq("search_episode_id", episode.get("id"))
+        .order("stage_number")
+        .execute()
+    )
+
+    return {
+        "episode": episode,
+        "runs": runs,
+        "sources": list_problem_sources(
+            user_id=user_id,
+            problem_id=problem_id,
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Internal knowledge
 # ---------------------------------------------------------------------------

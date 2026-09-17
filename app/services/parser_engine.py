@@ -172,7 +172,7 @@ GE: avtoportali.ge
     "eu": "Что нашли на европейских форумах"
   },
   "links": [
-    {"title": "Название темы", "url": "https://real-link", "description": "Ключевая подсказка из темы", "type": "link"}
+    {"title": "Название материала", "url": "https://real-link", "description": "Ключевая подсказка", "type": "link|video|image"}
   ],
   "topics_found": [
     {"title": "Заголовок темы", "forum": "drive2.ru", "url": "https://реальная-ссылка", "lang": "ru", "relevance": "high", "key_info": "Что решило проблему"}
@@ -229,7 +229,7 @@ def build_allowed_domains(data: DiagnosticRequest) -> list[str]:
         "forum.auto.fr",
         "avtoportali.ge",
     ]
-    if data.mode.lower() != "expanded":
+    if data.mode.lower() != "deep":
         return unique_domains(base_domains)
     text = f"{data.query} {data.car_info or ''} {data.evidence_context or ''}"
     domains = list(base_domains)
@@ -355,7 +355,73 @@ def _build_search_hints(data: DiagnosticRequest) -> list[str]:
                 "In the final summary, answer the requested operation directly: what to check first, what is adjusted mechanically/electronically, and what mistakes are dangerous.",
             ]
         )
+    video_terms = (
+        "youtube",
+        "youtu.be",
+        "ютуб",
+        "видео",
+        "video",
+    )
+    how_to_terms = (
+        "как заменить",
+        "как поменять",
+        "как снять",
+        "как установить",
+        "how to replace",
+        "how to remove",
+        "how to install",
+    )
+    if any(term in text for term in video_terms + how_to_terms):
+        hints.extend(
+            [
+                "The user explicitly wants a how-to or video result. Include relevant YouTube results when they directly match the requested vehicle, part, and operation.",
+                "Mark YouTube results with links[].type = video. Do not add generic or unrelated videos.",
+            ]
+        )
+    image_terms = (
+        "покажи фото",
+        "покажи изображение",
+        "покажи схему",
+        "как выглядит",
+        "где находится",
+        "image",
+        "photo",
+        "diagram",
+        "what does it look like",
+        "where is it located",
+    )
+    if any(term in text for term in image_terms):
+        hints.extend(
+            [
+                "The user explicitly wants visual material. Include a directly relevant image or diagram URL when the search result provides one.",
+                "Mark direct visual results with links[].type = image and keep the source page URL when a direct image URL is unavailable.",
+            ]
+        )
     return hints
+
+
+def _has_usable_remote_evidence(result: dict) -> bool:
+    if not isinstance(result, dict):
+        return False
+    for key in (
+        "links",
+        "topics_found",
+        "common_causes",
+        "solutions",
+        "extracted_cases",
+    ):
+        value = result.get(key)
+        if isinstance(value, (list, dict)) and value:
+            return True
+    boilerplate = (
+        "service is temporarily unavailable",
+        "сервис поиска временно недоступен",
+    )
+    for key in ("summary", "parser_summary", "recommendation"):
+        value = str(result.get(key) or "").strip().lower()
+        if value and not any(text in value for text in boilerplate):
+            return True
+    return False
 
 
 def _result_text_blob(result: dict) -> str:
@@ -446,7 +512,15 @@ async def diagnose(data: DiagnosticRequest) -> dict:
     if remote_url:
         try:
             remote_result = await _call_remote_parser(data, remote_url)
-            if not remote_result.get("error"):
+            if not remote_result.get("error") or _has_usable_remote_evidence(remote_result):
+                if remote_result.get("error"):
+                    warning = str(remote_result.pop("error") or "").strip()
+                    meta = remote_result.get("_meta")
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    meta["warning"] = warning
+                    meta["partial_result_recovered"] = True
+                    remote_result["_meta"] = meta
                 return _normalize_parser_result(
                     remote_result,
                     mode=mode,
@@ -476,7 +550,7 @@ async def diagnose(data: DiagnosticRequest) -> dict:
         + ", ".join(allowed_domains)
         + "."
     )
-    if mode == "expanded":
+    if mode == "deep":
         user_message += (
             "\n\nРЕЖИМ DEEP SEARCH: пользователь попросил больше информации. "
             "Ищи по расширенным автомобильным форумам, OEM-клубам и техническим сайтам. "

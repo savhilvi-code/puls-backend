@@ -29,6 +29,23 @@ def _problem(problem_id=PROBLEM_ID):
 
 
 class BackendV2ConversationTests(unittest.TestCase):
+    def test_structured_evidence_and_links_survive_empty_summary(self):
+        answer = core._format_research_answer(
+            "ru",
+            summary="",
+            links=[{"title": "Forum case", "url": "https://example.com/case", "type": "link"}],
+            evidence={
+                "common_causes": [{"cause": "Падение давления ATF"}],
+                "solutions": [{"title": "Проверка", "description": "Измерить давление на горячую"}],
+            },
+            sufficient=False,
+        )
+
+        self.assertIn("Падение давления ATF", answer)
+        self.assertIn("Измерить давление на горячую", answer)
+        self.assertIn("https://example.com/case", answer)
+        self.assertNotIn("Я запустил исследование", answer)
+
     def _run_chat(self, message, *, vehicles=None, latest_problem=None, problem=None, knowledge=None, research=None):
         stack = ExitStack()
         mocks = {
