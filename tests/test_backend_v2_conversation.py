@@ -68,7 +68,10 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIn("https://example.com/case", answer)
         self.assertNotIn("Я запустил исследование", answer)
 
-    def _run_chat(self, message, *, vehicles=None, latest_problem=None, problem=None, knowledge=None, research=None):
+    def _run_chat(
+        self, message, *, vehicles=None, latest_problem=None, problem=None,
+        knowledge=None, research=None, saved_vehicle=True, specs=None, saved_spec=True,
+    ):
         stack = ExitStack()
         mocks = {
             "profile": stack.enter_context(patch.object(core, "get_or_create_profile", new=AsyncMock(return_value=_user()))),
@@ -82,6 +85,17 @@ class BackendV2ConversationTests(unittest.TestCase):
             "save_message": stack.enter_context(patch.object(core.repo, "save_message", return_value={"id": "message-1"})),
             "save_problem": stack.enter_context(patch.object(core.repo, "save_problem", return_value=problem or _problem())),
             "event": stack.enter_context(patch.object(core.repo, "create_vehicle_event")),
+            "save_vehicle": stack.enter_context(patch.object(
+                core.repo, "save_vehicle",
+                return_value=(_vehicle() if saved_vehicle is True else saved_vehicle),
+            )),
+            "get_specs": stack.enter_context(patch.object(
+                core.repo, "get_vehicle_specs", return_value=specs,
+            )),
+            "upsert_specs": stack.enter_context(patch.object(
+                core.repo, "upsert_vehicle_specs",
+                return_value=({"id": "spec-1"} if saved_spec is True else saved_spec),
+            )),
             "knowledge": stack.enter_context(patch.object(core.repo, "find_relevant_knowledge", return_value=knowledge or [])),
             "natural": stack.enter_context(patch.object(core, "_natural_reply", new=AsyncMock(side_effect=lambda context, **kwargs: context.clarification_question or "Hi, I am here."))),
             "research": stack.enter_context(
@@ -167,6 +181,58 @@ class BackendV2ConversationTests(unittest.TestCase):
         mocks["research"].assert_called_once()
         self.assertEqual(mocks["research"].call_args.kwargs["problem_id"], existing_problem_id)
         self.assertEqual(mocks["save_problem"].call_args.kwargs["problem_id"], existing_problem_id)
+
+    def test_confirmed_vehicle_parameter_correction_persists(self):
+        vehicle = {**_vehicle(), "transmission": "Manual"}
+        response, mocks = self._run_chat("Да, исправь на автомат.", vehicles=[vehicle])
+
+        self.assertIn("изменён", response.answer)
+        self.assertEqual(mocks["save_vehicle"].call_args.kwargs["payload"], {"transmission": "Automatic"})
+
+    def test_vehicle_correction_does_not_claim_success_when_save_fails(self):
+        vehicle = {**_vehicle(), "transmission": "Manual"}
+        response, mocks = self._run_chat(
+            "Да, исправь на автомат.", vehicles=[vehicle], saved_vehicle=None,
+        )
+
+        self.assertIn("Не удалось сохранить", response.answer)
+        self.assertNotIn("изменён на", response.answer)
+
+    def test_user_installed_part_is_saved_as_actual(self):
+        response, mocks = self._run_chat(
+            "У меня установлены свечи NGK BKR6E", vehicles=[_vehicle()],
+        )
+
+        payload = mocks["upsert_specs"].call_args.kwargs["payload"]
+        self.assertEqual(payload["parameter_key"], "spark_plugs")
+        self.assertEqual(payload["actual_value"], "NGK BKR6E")
+        self.assertNotIn("recommended_value", payload)
+        self.assertIn("фактически", response.answer)
+
+    def test_recommended_part_never_becomes_actual(self):
+        response, mocks = self._run_chat(
+            "По мануалу рекомендуется масло 5W-40", vehicles=[_vehicle()],
+        )
+
+        payload = mocks["upsert_specs"].call_args.kwargs["payload"]
+        self.assertEqual(payload["recommended_value"], "5W-40")
+        self.assertNotIn("actual_value", payload)
+        self.assertIn("рекомендованную", response.answer)
+
+    def test_existing_user_confirmed_value_is_not_overwritten(self):
+        existing = {
+            "items": [{
+                "parameter_key": "engine_oil_viscosity",
+                "actual_value": "5W-30",
+                "source_type": "USER",
+            }]
+        }
+        response, mocks = self._run_chat(
+            "Я использую масло 5W-40", vehicles=[_vehicle()], specs=existing,
+        )
+
+        self.assertIn("Подтвердите", response.answer)
+        mocks["upsert_specs"].assert_not_called()
 
 
 if __name__ == "__main__":

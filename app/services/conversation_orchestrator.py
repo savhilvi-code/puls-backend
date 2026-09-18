@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import Request
 
+from app.database.supabase import SupabaseOperationError, SupabaseUnavailableError
 from app.schemas.chat import ChatResponse
 from app.services.auth_service import get_or_create_profile
 from app.services.openai_service import (
@@ -18,6 +19,11 @@ from app.services.formatter_service import format_technical_answer
 from app.services.subscription_service import (
     ensure_user_subscription,
     quota_payload,
+)
+from app.services.vehicle_fact_service import (
+    extract_vehicle_correction,
+    extract_vehicle_spec_fact,
+    persist_vehicle_spec_fact,
 )
 from app.services.v2_context import (
     TurnContext,
@@ -752,6 +758,10 @@ async def process_chat_message_v2(
     )
     language = requested_response_language(text) or message_language
 
+    vehicle_correction = extract_vehicle_correction(text)
+    vehicle_spec_fact = extract_vehicle_spec_fact(text)
+    vehicle_data_turn = bool(vehicle_correction or vehicle_spec_fact)
+
     latest_problem = (
         _latest_problem_for_context(
             user_id=user.id
@@ -784,7 +794,7 @@ async def process_chat_message_v2(
     if looks_like_meta_question(text):
         mode = "META_CHAT"
 
-    elif has_automotive_content(text) or (
+    elif vehicle_data_turn or has_automotive_content(text) or (
         _has_research_media_intent(text)
         and (explicit_problem_id or explicit_vehicle_id)
     ) or (
@@ -803,12 +813,14 @@ async def process_chat_message_v2(
             latest_problem=latest_problem,
         )
     )
+    if vehicle_data_turn and vehicle is None and not ambiguous_vehicle and len(vehicles) == 1:
+        vehicle = vehicles[0]
 
     reference_request = is_reference_request(text)
     problem_class = classify_problem(text)
 
     problem = None
-    if mode == "AUTOMOTIVE" and not reference_request:
+    if mode == "AUTOMOTIVE" and not reference_request and not vehicle_data_turn:
         problem = resolve_relevant_problem(
             user_id=user.id,
             vehicle_id=(vehicle or {}).get("id"),
@@ -1039,6 +1051,86 @@ async def process_chat_message_v2(
                 subscription
             ),
         )
+
+    if vehicle_correction:
+        try:
+            saved_vehicle = repo.save_vehicle(
+                user_id=user.id,
+                vehicle_id=vehicle.get("id"),
+                payload=vehicle_correction,
+            )
+        except (SupabaseOperationError, SupabaseUnavailableError):
+            saved_vehicle = None
+        changed = bool(saved_vehicle)
+        transmission = str(vehicle_correction.get("transmission") or "")
+        transmission_ru = "Автомат" if transmission == "Automatic" else "Механика"
+        if str(language or "").lower().startswith("ru"):
+            answer = (
+                f"Тип коробки передач изменён на «{transmission_ru}»."
+                if changed else
+                "Не удалось сохранить изменение типа коробки передач. Карточка автомобиля не изменена."
+            )
+        else:
+            answer = (
+                f"The transmission was changed to {transmission}."
+                if changed else
+                "The transmission change could not be saved. The vehicle card was not changed."
+            )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="user", text=text, language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="assistant", text=answer, language=language,
+        )
+        return ChatResponse(**response_context, answer=answer, links=[], quota=quota_payload(subscription))
+
+    if vehicle_spec_fact:
+        try:
+            result = persist_vehicle_spec_fact(
+                user_id=user.id,
+                vehicle_id=vehicle.get("id"),
+                fact=vehicle_spec_fact,
+            )
+        except (SupabaseOperationError, SupabaseUnavailableError):
+            result = {"status": "failed"}
+        status = result["status"]
+        if status == "conflict":
+            answer = (
+                f"Сейчас сохранено «{result['existing']}». Подтвердите, что нужно заменить на «{result['requested']}»."
+                if str(language or "").lower().startswith("ru") else
+                f"The saved value is {result['existing']}. Please confirm replacing it with {result['requested']}."
+            )
+        elif status == "saved":
+            actual = vehicle_spec_fact.value_kind == "actual"
+            if str(language or "").lower().startswith("ru"):
+                answer = (
+                    f"Сохранил «{vehicle_spec_fact.value}» как фактически используемое на автомобиле."
+                    if actual else
+                    f"Сохранил «{vehicle_spec_fact.value}» как рекомендованную спецификацию."
+                )
+            else:
+                answer = (
+                    f"Saved {vehicle_spec_fact.value} as used on this vehicle."
+                    if actual else
+                    f"Saved {vehicle_spec_fact.value} as a recommended specification."
+                )
+        else:
+            answer = (
+                "Не удалось сохранить параметр. Карточка автомобиля не изменена."
+                if str(language or "").lower().startswith("ru") else
+                "The parameter could not be saved. The vehicle card was not changed."
+            )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="user", text=text, language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="assistant", text=answer, language=language,
+        )
+        return ChatResponse(**response_context, answer=answer, links=[], quota=quota_payload(subscription))
 
     # A stored manual transmission and an automatic/AL4 report are mutually
     # inconsistent. Preserve the canonical vehicle record and clarify first.
