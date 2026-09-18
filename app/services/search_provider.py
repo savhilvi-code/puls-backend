@@ -21,6 +21,12 @@ from app.services.provider_config import (
 )
 
 
+ORDINARY_MAX_OUTPUT_TOKENS = 1400
+DEEP_MAX_OUTPUT_TOKENS = 2500
+ORDINARY_WEB_SEARCH_USES = 2
+DEEP_WEB_SEARCH_USES = 4
+
+
 def _error_result(*, message: str, mode: str, allowed_domains: list[str], fallback_used: bool = False) -> dict:
     return {
         "error": message,
@@ -68,13 +74,13 @@ def run_claude_search(client, data: DiagnosticRequest, user_message: str, domain
     expanded = data.mode.lower() == "deep"
     return client.messages.create(
         model=get_claude_search_model(),
-        max_tokens=5000 if expanded else 4000,
+        max_tokens=DEEP_MAX_OUTPUT_TOKENS if expanded else ORDINARY_MAX_OUTPUT_TOKENS,
         system=system_prompt,
         tools=[
             {
                 "type": "web_search_20250305",
                 "name": "web_search",
-                "max_uses": 6 if expanded else 3,
+                "max_uses": DEEP_WEB_SEARCH_USES if expanded else ORDINARY_WEB_SEARCH_USES,
                 "allowed_domains": unique_domains(domains),
             }
         ],
@@ -88,7 +94,7 @@ def run_openai_search(client, data: DiagnosticRequest, user_message: str, domain
         model=get_openai_search_model(),
         instructions=system_prompt,
         input=user_message,
-        max_output_tokens=5000 if expanded else 4000,
+        max_output_tokens=DEEP_MAX_OUTPUT_TOKENS if expanded else ORDINARY_MAX_OUTPUT_TOKENS,
         tools=[
             {
                 "type": "web_search_preview",

@@ -48,6 +48,77 @@ _EVIDENCE_LIST_FIELDS = (
     "topics_found",
 )
 
+NO_EVIDENCE = "NO_EVIDENCE"
+USEFUL_PRELIMINARY_EVIDENCE = "USEFUL_PRELIMINARY_EVIDENCE"
+SUFFICIENT_EVIDENCE = "SUFFICIENT_EVIDENCE"
+
+DEFAULT_DIAGNOSTIC_STRATEGIES = (
+    {
+        "key": "model_owner",
+        "purpose": "Manufacturer/model-specific owner forums and communities.",
+    },
+    {
+        "key": "general_technical",
+        "purpose": "General automotive technical and mechanic communities.",
+    },
+    {
+        "key": "regional_owner",
+        "purpose": "Regional and language-specific owner communities.",
+    },
+)
+
+DEFAULT_HOWTO_STRATEGIES = (
+    {
+        "key": "video",
+        "purpose": "Vehicle-specific video and visual how-to sources.",
+    },
+    *DEFAULT_DIAGNOSTIC_STRATEGIES,
+)
+
+
+def _bounded_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 3:
+        return str(value or "")[:500]
+    if isinstance(value, str):
+        return value[:600]
+    if isinstance(value, list):
+        return [_bounded_value(item, depth=depth + 1) for item in value[:4]]
+    if isinstance(value, dict):
+        return {
+            str(key)[:80]: _bounded_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:10]
+        }
+    return value
+
+
+def _compact_problem_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    source = context if isinstance(context, dict) else {}
+    vehicle = source.get("vehicle") if isinstance(source.get("vehicle"), dict) else {}
+    problem = source.get("problem") if isinstance(source.get("problem"), dict) else {}
+    conditions = problem.get("conditions") if isinstance(problem.get("conditions"), dict) else {}
+
+    def texts(value: Any) -> list[str]:
+        return [str(item or "")[:260] for item in value[:4] if str(item or "").strip()] if isinstance(value, list) else []
+
+    return {
+        "vehicle": {str(key)[:60]: str(value or "")[:100] for key, value in list(vehicle.items())[:8]},
+        "problem": {
+            "title": str(problem.get("title") or "")[:180],
+            "problem_class": str(problem.get("problem_class") or "")[:80],
+            "component": str(problem.get("component") or "")[:100],
+            "symptoms": texts(problem.get("symptoms")),
+            "conditions": {
+                str(key)[:60]: str(value or "")[:180]
+                for key, value in list(conditions.items())[:5]
+            },
+            "confirmed_facts": texts(problem.get("confirmed_facts")),
+            "checks_summary": str(problem.get("checks_summary") or "")[:350],
+            "current_conclusion": str(problem.get("current_conclusion") or "")[:350],
+            "next_step": str(problem.get("next_step") or "")[:250],
+        },
+        "latest_clarification": str(source.get("latest_clarification") or "")[:700],
+    }
+
 
 def _structured_evidence(
     result: dict[str, Any],
@@ -61,13 +132,13 @@ def _structured_evidence(
         if not isinstance(value, list):
             value = raw.get(key)
         if isinstance(value, list) and value:
-            evidence[key] = value[:6]
+            evidence[key] = _bounded_value(value)
 
     regional = result.get("regional_insights")
     if not isinstance(regional, dict):
         regional = raw.get("regional_insights")
     if isinstance(regional, dict) and regional:
-        evidence["regional_insights"] = dict(list(regional.items())[:6])
+        evidence["regional_insights"] = _bounded_value(regional)
 
     for key in (
         "recommendation",
@@ -80,7 +151,7 @@ def _structured_evidence(
             or ""
         ).strip()
         if value:
-            evidence[key] = value[:900]
+            evidence[key] = value[:600]
 
     evidence["need_more_info"] = bool(
         result.get("need_more_info")
@@ -167,24 +238,41 @@ def evidence_is_sufficient(
         else []
     )
 
-    if result.get("sufficient_evidence") is True:
-        return True
+    useful = bool(summary or cases or _has_useful_evidence(result))
+    evidence_items = len(cases) + sum(
+        len(result.get(key) or [])
+        for key in ("common_causes", "solutions")
+        if isinstance(result.get(key), list)
+    )
+    strong_source_set = len(links) >= 2 and (evidence_items >= 2 or bool(summary))
+    return bool(useful and links and (result.get("sufficient_evidence") is True or strong_source_set))
 
-    if (summary or _has_useful_evidence(result)) and links:
-        return True
 
-    if (
-        stage_number >= 3
-        and (
-            summary
-            or links
-            or cases
-            or _has_useful_evidence(result)
-        )
-    ):
-        return True
-
-    return False
+def accumulated_evidence_state(
+    *,
+    summary: str,
+    evidence: dict[str, Any],
+    links: list[dict[str, Any]],
+    provider_sufficient: bool = False,
+) -> str:
+    useful = bool(
+        str(summary or "").strip()
+        or any(evidence.get(key) for key in _EVIDENCE_LIST_FIELDS)
+        or evidence.get("recommendation")
+    )
+    if not useful:
+        return NO_EVIDENCE
+    # Provider confidence is advisory; source-backed sufficiency still needs
+    # normalized provenance. Useful unlinked analysis remains preliminary.
+    evidence_items = sum(
+        len(evidence.get(key) or [])
+        for key in ("common_causes", "solutions", "extracted_cases")
+        if isinstance(evidence.get(key), list)
+    )
+    strong_source_set = len(links) >= 2 and (evidence_items >= 2 or bool(summary))
+    if links and (provider_sufficient or strong_source_set):
+        return SUFFICIENT_EVIDENCE
+    return USEFUL_PRELIMINARY_EVIDENCE
 
 
 def next_stage_reason(
@@ -243,25 +331,55 @@ def _stage_payload(
     query: str,
     language: str,
     previous_evidence: list[dict[str, Any]],
+    problem_context: dict[str, Any] | None,
+    strategy: dict[str, str],
+    deep: bool,
 ) -> dict[str, Any]:
+    compact_previous = [
+        {
+            "stage_number": item.get("stage_number"),
+            "source_group": item.get("source_group"),
+            "result_summary": str(item.get("result_summary") or "")[:600],
+            "evidence": _bounded_value(item.get("evidence") or {}),
+            "sources": _bounded_value(item.get("sources") or []),
+            "unresolved_reason": str(item.get("unresolved_reason") or "")[:300],
+        }
+        for item in previous_evidence[-3:]
+    ]
     previous_summary = json.dumps(
-        previous_evidence,
+        compact_previous,
         ensure_ascii=False,
         separators=(",", ":"),
     ) if previous_evidence else ""
+    if len(previous_summary) > 6000:
+        previous_summary = previous_summary[:6000]
 
     return {
-        "active_car": vehicle_label,
-        "symptom": query,
-        "query": query,
+        "active_car": vehicle_label[:400],
+        "symptom": query[:1600],
+        "query": query[:1600],
         "evidence_context": previous_summary,
-        "mode": (
-            "deep"
-            if stage_number > 1
-            else "normal"
-        ),
+        "problem_context": _compact_problem_context(problem_context),
+        "source_group": strategy["key"],
+        "stage_purpose": strategy["purpose"],
+        "mode": "deep" if deep else "normal",
         "language": language,
     }
+
+
+def _stage_strategies(trigger_type: str) -> tuple[dict[str, str], ...]:
+    return (
+        DEFAULT_HOWTO_STRATEGIES
+        if str(trigger_type or "").upper() == "HOWTO"
+        else DEFAULT_DIAGNOSTIC_STRATEGIES
+    )
+
+
+def _explicit_deep_request(query: str) -> bool:
+    lowered = " ".join(str(query or "").lower().split())
+    return any(marker in lowered for marker in (
+        "глубокий поиск", "поищи глубже", "глубже", "search deeper", "deep search",
+    ))
 
 
 def _deduplicate_links(
@@ -448,9 +566,10 @@ async def run_search_stages(
     vehicle_label: str,
     query: str,
     language: str,
+    problem_context: dict[str, Any] | None = None,
     conversation_id: str | None = None,
     trigger_type: str = "DIAGNOSTIC",
-    max_stages: int = 3,
+    max_stages: int | None = None,
     runner: StageRunner = parse_diagnostic,
 ) -> ResearchResult:
     can_run, subscription = can_run_research(
@@ -530,21 +649,26 @@ async def run_search_stages(
     final_summary = ""
     accumulated_evidence: dict[str, Any] = {}
     sufficient = False
+    evidence_state = NO_EVIDENCE
+    provider_sufficient = False
     final_status = "INSUFFICIENT_EVIDENCE"
 
-    total_stages = max(
-        int(max_stages or 1),
-        1,
-    )
+    strategies = _stage_strategies(trigger_type)
+    total_stages = len(strategies) if max_stages is None else min(max(int(max_stages), 1), len(strategies))
+    deep_requested = _explicit_deep_request(query)
 
     for stage_number in range(
         1,
         total_stages + 1,
     ):
+        strategy = strategies[stage_number - 1]
         input_context = {
             "vehicle": vehicle_label,
             "query": query,
             "previous_stages": previous_evidence,
+            "problem_context": _compact_problem_context(problem_context),
+            "source_group": strategy["key"],
+            "stage_purpose": strategy["purpose"],
         }
 
         try:
@@ -557,6 +681,9 @@ async def run_search_stages(
                     previous_evidence=(
                         previous_evidence
                     ),
+                    problem_context=problem_context,
+                    strategy=strategy,
+                    deep=deep_requested,
                 )
             )
 
@@ -592,24 +719,29 @@ async def run_search_stages(
             accumulated_evidence,
             stage_evidence,
         )
-
-        sufficient = (
-            evidence_is_sufficient(
-                result,
-                stage_number=stage_number,
+        stage_links = _deduplicate_links(all_links + links)
+        if summary:
+            final_summary = summary
+        provider_sufficient = provider_sufficient or result.get("sufficient_evidence") is True
+        evidence_state = (
+            accumulated_evidence_state(
+                summary=final_summary,
+                evidence=accumulated_evidence,
+                links=stage_links,
+                provider_sufficient=provider_sufficient,
             )
             if status == "COMPLETED"
-            else False
+            else evidence_state
         )
-
-        reason = (
-            next_stage_reason(
-                result,
-                stage_number=stage_number,
-            )
-            if status == "COMPLETED"
-            else "Search provider failed."
-        )
+        sufficient = evidence_state == SUFFICIENT_EVIDENCE
+        if status != "COMPLETED":
+            reason = "Search provider failed."
+        elif evidence_state == NO_EVIDENCE:
+            reason = "This source group produced no useful evidence."
+        elif evidence_state == USEFUL_PRELIMINARY_EVIDENCE:
+            reason = "Useful preliminary evidence lacks enough source provenance."
+        else:
+            reason = ""
 
         # Supabase V2 stores counts in these columns,
         # not arrays of source objects.
@@ -688,6 +820,7 @@ async def run_search_stages(
                     sufficient
                 ),
                 "evidence": stage_evidence,
+                "source_group": strategy["key"],
                 "sources": [
                     {
                         "title": str(item.get("title") or "").strip(),
@@ -703,9 +836,6 @@ async def run_search_stages(
         all_links.extend(
             links
         )
-
-        if summary:
-            final_summary = summary
 
         for link in links:
             source = repo.upsert_source(
@@ -741,6 +871,9 @@ async def run_search_stages(
         if sufficient:
             final_status = "COMPLETED"
             break
+
+    if evidence_state == USEFUL_PRELIMINARY_EVIDENCE:
+        final_status = "COMPLETED"
 
     all_links = _deduplicate_links(
         all_links

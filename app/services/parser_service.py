@@ -429,7 +429,13 @@ def _has_usable_payload(data: dict) -> bool:
     for key in ("parser_summary", "summary", "recommendation"):
         if str(data.get(key) or "").strip():
             return True
-    if data.get("links") or data.get("topics_found") or data.get("extracted_cases"):
+    if any(
+        data.get(key)
+        for key in (
+            "links", "topics_found", "extracted_cases",
+            "common_causes", "solutions", "unlikely_causes", "regional_insights",
+        )
+    ):
         return True
     return False
 
@@ -552,10 +558,17 @@ async def parse_diagnostic(router_json: dict) -> dict:
     ).strip()
 
     payload = DiagnosticRequest(
-        query=query,
+        query=query[:1600],
         lang=str(router_json.get("language", "en") or "en"),
-        car_info=str(router_json.get("active_car") or router_json.get("car_info") or ""),
-        evidence_context=str(router_json.get("evidence_context") or ""),
+        car_info=str(router_json.get("active_car") or router_json.get("car_info") or "")[:400],
+        evidence_context=str(router_json.get("evidence_context") or "")[:6000],
+        problem_context=(
+            router_json.get("problem_context")
+            if isinstance(router_json.get("problem_context"), dict)
+            else None
+        ),
+        source_group=str(router_json.get("source_group") or "")[:80],
+        stage_purpose=str(router_json.get("stage_purpose") or "")[:300],
         mode=mode,
     )
     focus_group = _extract_focus_group_safe(query)
@@ -570,9 +583,9 @@ async def parse_diagnostic(router_json: dict) -> dict:
     forums_found = data.get("forums_found")
     links = data.get("links", [])
     extracted_cases = data.get("extracted_cases", [])
-    normalized_cases = _normalize_extracted_cases(extracted_cases)
+    normalized_cases = _normalize_extracted_cases(extracted_cases)[:4]
     if not normalized_cases:
-        normalized_cases = _build_extracted_cases_from_structured(data)
+        normalized_cases = _build_extracted_cases_from_structured(data)[:4]
 
     parser_summary = str(data.get("parser_summary") or data.get("summary") or "").strip()
     if parser_summary.lower() in {
@@ -585,11 +598,11 @@ async def parse_diagnostic(router_json: dict) -> dict:
     if not parser_summary and normalized_cases:
         parser_summary = str(normalized_cases[0].get("cause") or normalized_cases[0].get("solution") or "").strip()
 
-    normalized_links = _normalize_links(links)
+    normalized_links = _normalize_links(links)[:6]
     if not normalized_links:
-        normalized_links = _build_links_from_topics(topics_found)
+        normalized_links = _build_links_from_topics(topics_found)[:6]
 
-    filtered_topics = topics_found if isinstance(topics_found, list) else []
+    filtered_topics = (topics_found if isinstance(topics_found, list) else [])[:6]
     filtered_topics = _filter_topics_for_focus(filtered_topics, focus_group)
     normalized_cases = _filter_cases_for_focus(normalized_cases, focus_group)
     normalized_links = _filter_links_for_focus(normalized_links, focus_group)
@@ -610,9 +623,9 @@ async def parse_diagnostic(router_json: dict) -> dict:
         "extracted_cases": normalized_cases,
         "parser_summary": parser_summary,
         "topics_found": filtered_topics,
-        "common_causes": data.get("common_causes") if isinstance(data.get("common_causes"), list) else [],
-        "solutions": data.get("solutions") if isinstance(data.get("solutions"), list) else [],
-        "unlikely_causes": data.get("unlikely_causes") if isinstance(data.get("unlikely_causes"), list) else [],
+        "common_causes": (data.get("common_causes") if isinstance(data.get("common_causes"), list) else [])[:4],
+        "solutions": (data.get("solutions") if isinstance(data.get("solutions"), list) else [])[:4],
+        "unlikely_causes": (data.get("unlikely_causes") if isinstance(data.get("unlikely_causes"), list) else [])[:4],
         "regional_insights": data.get("regional_insights") if isinstance(data.get("regional_insights"), dict) else {},
         "recommendation": str(data.get("recommendation") or "").strip(),
         "need_more_info": bool(data.get("need_more_info")),

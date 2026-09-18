@@ -12,6 +12,7 @@ class SearchStageV2Tests(unittest.TestCase):
                 "parser_summary": "Known source-backed answer",
                 "links": [{"title": "Source", "url": "https://example.com/thread"}],
                 "extracted_cases": [],
+                "sufficient_evidence": True,
                 "_raw": {},
             }
         )
@@ -55,6 +56,7 @@ class SearchStageV2Tests(unittest.TestCase):
                     "parser_summary": "Expanded answer",
                     "links": [{"title": "Source", "url": "https://example.com/expanded"}],
                     "extracted_cases": [],
+                    "sufficient_evidence": True,
                     "_raw": {},
                 },
             ]
@@ -93,11 +95,63 @@ class SearchStageV2Tests(unittest.TestCase):
         self.assertTrue(result.sufficient)
         self.assertEqual(runner.call_count, 2)
         second_call_payload = runner.call_args_list[1].args[0]
-        self.assertEqual(second_call_payload["mode"], "deep")
+        self.assertEqual(second_call_payload["mode"], "normal")
+        self.assertEqual(runner.call_args_list[0].args[0]["source_group"], "model_owner")
+        self.assertEqual(second_call_payload["source_group"], "general_technical")
         self.assertIn('"stage_number":1', second_call_payload["evidence_context"])
         self.assertEqual([run["stage_number"] for run in saved_runs], [1, 2])
         self.assertFalse(saved_runs[0]["sufficient_evidence"])
         self.assertTrue(saved_runs[1]["sufficient_evidence"])
+
+    def test_accumulated_evidence_participates_in_later_sufficiency(self):
+        runner = AsyncMock(side_effect=[
+            {"common_causes": [{"cause": "Hot ATF pressure loss"}], "links": [], "_raw": {}},
+            {"links": [{"title": "Source", "url": "https://example.com/atf"}], "sufficient_evidence": True, "_raw": {}},
+        ])
+        with (
+            patch.object(stages, "can_run_research", return_value=(True, {})),
+            patch.object(stages, "consume_research_credit", return_value={}),
+            patch.object(stages.repo, "create_search_episode", return_value={"id": 77}),
+            patch.object(stages.repo, "get_latest_problem_research", return_value=None),
+            patch.object(stages.repo, "create_search_run", side_effect=lambda **kwargs: {"id": kwargs["payload"]["stage_number"], **kwargs["payload"]}),
+            patch.object(stages.repo, "update_search_episode"),
+            patch.object(stages.repo, "upsert_source", return_value={"id": 300}),
+            patch.object(stages.repo, "link_problem_source"),
+        ):
+            result = asyncio.run(stages.run_search_stages(
+                user_id=1, vehicle_id=10, problem_id=20, vehicle_label="Peugeot 307",
+                query="hot transmission slip", language="en", runner=runner,
+            ))
+
+        self.assertTrue(result.sufficient)
+        self.assertEqual(runner.call_count, 2)
+        self.assertEqual(result.evidence["common_causes"][0]["cause"], "Hot ATF pressure loss")
+
+    def test_useful_unlinked_evidence_is_preliminary_not_discarded(self):
+        runner = AsyncMock(return_value={
+            "common_causes": [{"cause": "Possible pressure loss"}],
+            "solutions": [{"title": "Check ATF pressure"}],
+            "links": [],
+            "_raw": {},
+        })
+        with (
+            patch.object(stages, "can_run_research", return_value=(True, {})),
+            patch.object(stages, "consume_research_credit", return_value={}),
+            patch.object(stages.repo, "create_search_episode", return_value={"id": 77}),
+            patch.object(stages.repo, "get_latest_problem_research", return_value=None),
+            patch.object(stages.repo, "create_search_run", side_effect=lambda **kwargs: {"id": kwargs["payload"]["stage_number"], **kwargs["payload"]}),
+            patch.object(stages.repo, "update_search_episode"),
+            patch.object(stages.repo, "upsert_source", return_value=None),
+            patch.object(stages.repo, "link_problem_source"),
+        ):
+            result = asyncio.run(stages.run_search_stages(
+                user_id=1, vehicle_id=10, problem_id=20, vehicle_label="Peugeot 307",
+                query="hot transmission slip", language="en", runner=runner,
+            ))
+
+        self.assertFalse(result.sufficient)
+        self.assertEqual(result.evidence["common_causes"][0]["cause"], "Possible pressure loss")
+        self.assertEqual(runner.call_count, 3)
 
     def test_quota_exhaustion_prevents_episode_creation(self):
         with (
@@ -188,6 +242,7 @@ class SearchStageV2Tests(unittest.TestCase):
             return_value={
                 "parser_summary": "Noise diagnosis",
                 "links": [{"title": "Source", "url": "https://example.com/noise"}],
+                "sufficient_evidence": True,
                 "_raw": {},
             }
         )

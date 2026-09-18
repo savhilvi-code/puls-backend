@@ -277,6 +277,23 @@ class BackendV2ConversationTests(unittest.TestCase):
         mocks["research"].assert_awaited_once()
         self.assertEqual(mocks["research"].call_args.kwargs["trigger_type"], "DIAGNOSTIC")
 
+    def test_search_receives_compact_accumulated_problem_context(self):
+        existing = {
+            **_problem(),
+            "problem_class": "TRANSMISSION",
+            "symptoms": ["АКПП нормально работает на холодную, после прогрева не трогается"],
+            "confirmed_facts": ["Ошибок на панели нет"],
+        }
+        clarification = "После прогрева обороты растут, но машина почти не может разгоняться."
+        response, mocks = self._run_chat(
+            clarification, vehicles=[_vehicle()], problem=existing,
+        )
+
+        context = mocks["research"].call_args.kwargs["problem_context"]
+        self.assertIn("после прогрева", context["problem"]["symptoms"][0])
+        self.assertEqual(context["latest_clarification"], clarification)
+        self.assertNotIn("recent_conversation", context)
+
 
 if __name__ == "__main__":
     unittest.main()

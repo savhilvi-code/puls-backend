@@ -516,6 +516,38 @@ def _search_trigger_type(text: str) -> str:
     return "HOWTO" if any(marker in lowered for marker in howto_markers) else "REFERENCE"
 
 
+def _compact_problem_search_context(
+    *, vehicle: dict[str, Any], problem: dict[str, Any], latest_clarification: str,
+) -> dict[str, Any]:
+    def short_list(value: Any) -> list[str]:
+        return [str(item or "").strip()[:400] for item in value[:6] if str(item or "").strip()] if isinstance(value, list) else []
+
+    conditions = problem.get("conditions")
+    conditions = conditions if isinstance(conditions, dict) else {}
+    return {
+        "vehicle": {
+            key: str(vehicle.get(key) or "")[:120]
+            for key in ("make", "model", "generation", "year", "engine_code", "fuel_type", "transmission", "drivetrain")
+            if vehicle.get(key) not in (None, "")
+        },
+        "problem": {
+            "title": str(problem.get("title") or "")[:200],
+            "problem_class": str(problem.get("problem_class") or "")[:80],
+            "component": str(problem.get("component") or "")[:120],
+            "symptoms": short_list(problem.get("symptoms")),
+            "conditions": {
+                str(key)[:80]: str(value or "")[:300]
+                for key, value in list(conditions.items())[:8]
+            },
+            "confirmed_facts": short_list(problem.get("confirmed_facts")),
+            "checks_summary": str(problem.get("checks_summary") or "")[:800],
+            "current_conclusion": str(problem.get("current_conclusion") or "")[:800],
+            "next_step": str(problem.get("next_step") or "")[:500],
+        },
+        "latest_clarification": str(latest_clarification or "")[:1200],
+    }
+
+
 def _transmission_conflict(vehicle: dict[str, Any], text: str) -> bool:
     stored = " ".join(str(vehicle.get("transmission") or "").lower().split())
     lowered = " ".join(str(text or "").lower().split())
@@ -1224,6 +1256,11 @@ async def process_chat_message_v2(
             vehicle_label=vehicle_label(vehicle),
             query=text,
             language=language,
+            problem_context=_compact_problem_search_context(
+                vehicle=vehicle,
+                problem=reference_problem or {},
+                latest_clarification=text,
+            ),
         )
         answer = plain_text_response(
             _format_research_answer(
@@ -1485,6 +1522,11 @@ async def process_chat_message_v2(
         ),
         query=text,
         language=language,
+        problem_context=_compact_problem_search_context(
+            vehicle=vehicle,
+            problem=problem or {},
+            latest_clarification=text,
+        ),
         conversation_id=conversation_id,
         trigger_type="DIAGNOSTIC",
     )

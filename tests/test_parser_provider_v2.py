@@ -2,7 +2,7 @@ import asyncio
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.schemas.parser import DiagnosticRequest
 from app.services import parser_engine, parser_service, search_provider
@@ -86,6 +86,15 @@ class ParserProviderV2Tests(unittest.TestCase):
         self.assertEqual(result["parser_summary"], "contract ok")
         self.assertEqual(result["links"][0]["url"], "https://example.com/thread")
 
+    def test_sufficient_evidence_contract_is_explicit_and_preserved(self):
+        payload = _parser_payload("contract ok")
+        payload["sufficient_evidence"] = True
+        with patch.object(parser_service, "diagnose", new=AsyncMock(return_value=payload)):
+            result = asyncio.run(parser_service.parse_diagnostic({"query": "gearbox hot"}))
+
+        self.assertTrue(result["sufficient_evidence"])
+        self.assertIn('"sufficient_evidence"', parser_engine.SYSTEM_PROMPT)
+
     def test_remote_parser_payload_uses_evidence_context_not_chat_history(self):
         captured = {}
 
@@ -120,6 +129,30 @@ class ParserProviderV2Tests(unittest.TestCase):
         self.assertTrue(result["_meta"]["partial_result_recovered"])
         provider_call.assert_not_called()
 
+    def test_unusable_remote_result_falls_back_once(self):
+        local_result = _parser_payload("local fallback")
+        with (
+            patch.object(parser_engine, "_remote_parser_url", return_value="https://remote.example/search"),
+            patch.object(parser_engine, "_call_remote_parser", new=AsyncMock(return_value={})),
+            patch.object(parser_engine, "run_search_provider", return_value=local_result) as provider_call,
+        ):
+            result = asyncio.run(parser_engine.diagnose(_request()))
+
+        self.assertEqual(result["summary"], "local fallback")
+        provider_call.assert_called_once()
+
+    def test_ordinary_and_deep_provider_limits_are_bounded(self):
+        client = SimpleNamespace(messages=SimpleNamespace(create=Mock(return_value=SimpleNamespace(content=[]))))
+        search_provider.run_claude_search(client, _request("normal"), "message", ["example.com"], system_prompt="prompt")
+        normal = client.messages.create.call_args.kwargs
+        search_provider.run_claude_search(client, _request("deep"), "message", ["example.com"], system_prompt="prompt")
+        deep = client.messages.create.call_args.kwargs
+
+        self.assertEqual(normal["max_tokens"], 1400)
+        self.assertEqual(normal["tools"][0]["max_uses"], 2)
+        self.assertEqual(deep["max_tokens"], 2500)
+        self.assertEqual(deep["tools"][0]["max_uses"], 4)
+
     def test_video_and_image_hints_are_intent_driven(self):
         ordinary = parser_engine._build_search_hints(_request())
         video = parser_engine._build_search_hints(
@@ -132,6 +165,21 @@ class ParserProviderV2Tests(unittest.TestCase):
         self.assertFalse(any("YouTube" in hint for hint in ordinary))
         self.assertTrue(any("YouTube" in hint for hint in video))
         self.assertTrue(any("visual material" in hint for hint in image))
+
+    def test_stage_source_groups_use_distinct_domain_sets(self):
+        groups = {}
+        for source_group in ("model_owner", "general_technical", "regional_owner"):
+            request = DiagnosticRequest(
+                query="hot transmission slip",
+                car_info="Peugeot 307",
+                source_group=source_group,
+            )
+            groups[source_group] = set(parser_engine.build_allowed_domains(request))
+
+        self.assertTrue(all(groups.values()))
+        self.assertTrue(groups["model_owner"].isdisjoint(groups["general_technical"]))
+        self.assertTrue(groups["general_technical"].isdisjoint(groups["regional_owner"]))
+        self.assertTrue(groups["model_owner"].isdisjoint(groups["regional_owner"]))
 
     def test_explicit_media_request_uses_single_local_provider_path(self):
         request = DiagnosticRequest(

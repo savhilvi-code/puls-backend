@@ -118,10 +118,36 @@ FALLBACK_DOMAINS = [
     "minkara.carview.co.jp",
 ]
 
+GENERAL_TECHNICAL_DOMAINS = [
+    "pistonheads.com",
+    "bobistheoilguy.com",
+    "mechanics.stackexchange.com",
+    "obd-codes.com",
+    "carcomplaints.com",
+    "garagejournal.com",
+]
+
+REGIONAL_OWNER_DOMAINS = [
+    "drive2.ru",
+    "drom.ru",
+    "auto.ru",
+    "nissanstyle.ru",
+    "nissan-org.ru",
+    "carclub.ru",
+    "minkara.carview.co.jp",
+    "autohome.com.cn",
+    "xcar.com.cn",
+    "pcauto.com.cn",
+    "motor-talk.de",
+    "forum.auto.fr",
+    "avtoportali.ge",
+]
+
 
 SYSTEM_PROMPT = """ТЫ — опытный автодиагност с 20+ лет практики. Специализируешься на японских, европейских и американских автомобилях, турбомоторах, системах ЭБУ/ECU.
 
 У тебя есть инструмент web_search. ОБЯЗАТЕЛЬНО используй его для поиска реальных обсуждений на форумах перед ответом.
+Для текущей стадии используй только переданные allowed domains и её Stage purpose; не повторяй другие группы источников.
 
 ФОРУМЫ ДЛЯ ПОИСКА:
 RU: drive2.ru, drom.ru, auto.ru, nissanstyle.ru, nissan-org.ru, carclub.ru
@@ -181,8 +207,12 @@ GE: avtoportali.ge
   "confidence": "high|medium|low",
   "recommendation": "С чего начать",
   "need_more_info": false,
-  "clarifying_question": ""
-}"""
+  "clarifying_question": "",
+  "sufficient_evidence": false
+}
+
+Set sufficient_evidence=true only when the conclusion is supported by the real URLs returned in links.
+"""
 
 
 def detect_forum_groups(text: str) -> list[str]:
@@ -208,35 +238,27 @@ def detect_forum_groups(text: str) -> list[str]:
 
 
 def build_allowed_domains(data: DiagnosticRequest) -> list[str]:
-    base_domains = [
-        "drive2.ru",
-        "drom.ru",
-        "auto.ru",
-        "nissanstyle.ru",
-        "nissan-org.ru",
-        "carclub.ru",
-        "pistonheads.com",
-        "bobistheoilguy.com",
-        "mechanics.stackexchange.com",
-        "obd-codes.com",
-        "carcomplaints.com",
-        "nissanclub.com",
-        "minkara.carview.co.jp",
-        "autohome.com.cn",
-        "xcar.com.cn",
-        "pcauto.com.cn",
-        "motor-talk.de",
-        "forum.auto.fr",
-        "avtoportali.ge",
-    ]
-    if _has_explicit_video_intent(data):
-        base_domains.extend(["youtube.com", "youtu.be"])
-    if data.mode.lower() != "deep":
-        return unique_domains(base_domains)
-    text = f"{data.query} {data.car_info or ''} {data.evidence_context or ''}"
-    domains = list(base_domains)
-    for group in detect_forum_groups(text):
-        domains.extend(EXTRA_FORUMS.get(group, []))
+    source_group = str(data.source_group or "all_configured").strip().lower()
+    text = f"{data.query} {data.car_info or ''}"
+    if source_group == "model_owner":
+        domains = []
+        for group in detect_forum_groups(text):
+            if group != "general":
+                domains.extend(EXTRA_FORUMS.get(group, []))
+        if not domains:
+            domains = ["auto.ru", "carclub.ru", "pistonheads.com"]
+    elif source_group == "general_technical":
+        domains = list(GENERAL_TECHNICAL_DOMAINS)
+    elif source_group == "regional_owner":
+        domains = list(REGIONAL_OWNER_DOMAINS)
+    elif source_group == "video":
+        domains = ["youtube.com", "youtu.be"]
+    else:
+        domains = list(REGIONAL_OWNER_DOMAINS) + list(GENERAL_TECHNICAL_DOMAINS)
+        for group in detect_forum_groups(text):
+            domains.extend(EXTRA_FORUMS.get(group, []))
+    if _has_explicit_video_intent(data) and source_group == "all_configured":
+        domains.extend(["youtube.com", "youtu.be"])
     return unique_domains(domains)
 
 
@@ -256,9 +278,9 @@ async def _call_remote_parser(data: DiagnosticRequest, url: str) -> dict:
         "lang": data.lang,
         "car_info": data.car_info,
         "evidence_context": data.evidence_context,
-        # Temporary compatibility for the deployed parser contract. The
-        # canonical field remains evidence_context.
-        "conversation_history": data.evidence_context,
+        "problem_context": data.problem_context,
+        "source_group": data.source_group,
+        "stage_purpose": data.stage_purpose,
         "mode": data.mode,
     }
 
@@ -544,7 +566,7 @@ async def diagnose(data: DiagnosticRequest) -> dict:
     ):
         try:
             remote_result = await _call_remote_parser(data, remote_url)
-            if not remote_result.get("error") or _has_usable_remote_evidence(remote_result):
+            if _has_usable_remote_evidence(remote_result):
                 if remote_result.get("error"):
                     warning = str(remote_result.pop("error") or "").strip()
                     meta = remote_result.get("_meta")
@@ -567,6 +589,13 @@ async def diagnose(data: DiagnosticRequest) -> dict:
         context_parts.append(f"Машина пользователя: {data.car_info}")
     if data.evidence_context:
         context_parts.append(f"Previous search evidence: {data.evidence_context}")
+    if data.problem_context:
+        context_parts.append(
+            "Compact Problem context: "
+            + json.dumps(data.problem_context, ensure_ascii=False, separators=(",", ":"))[:4000]
+        )
+    if data.stage_purpose:
+        context_parts.append(f"Stage purpose: {data.stage_purpose[:300]}")
     context = "\n".join(context_parts)
     user_message = (
         f"{context}\n\n"
