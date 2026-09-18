@@ -277,6 +277,44 @@ class SearchStageV2Tests(unittest.TestCase):
         create_episode.assert_called_once()
         runner.assert_awaited_once()
 
+    def test_empty_persisted_episode_is_not_reused_for_continuation(self):
+        persisted = {
+            "episode": {
+                "id": 70,
+                "trigger_type": "DIAGNOSTIC",
+                "search_context": {"reason": "акпп не едет на горячую"},
+            },
+            "runs": [{
+                "sufficient_evidence": False,
+                "result_data": {"confidence": "medium", "need_more_info": False},
+            }],
+            "sources": [],
+        }
+        runner = AsyncMock(return_value={
+            "parser_summary": "Fresh source-backed result",
+            "links": [{"title": "Source", "url": "https://example.com/fresh"}],
+            "sufficient_evidence": True,
+            "_raw": {},
+        })
+        with (
+            patch.object(stages, "can_run_research", return_value=(True, {})),
+            patch.object(stages.repo, "get_latest_problem_research", return_value=persisted),
+            patch.object(stages.repo, "create_search_episode", return_value={"id": 71}),
+            patch.object(stages.repo, "create_search_run", side_effect=lambda **kwargs: {"id": 1, **kwargs["payload"]}),
+            patch.object(stages.repo, "update_search_episode"),
+            patch.object(stages.repo, "upsert_source", return_value={"id": 300}),
+            patch.object(stages.repo, "link_problem_source"),
+            patch.object(stages, "consume_research_credit", return_value={}),
+        ):
+            result = asyncio.run(stages.run_search_stages(
+                user_id=1, vehicle_id=10, problem_id=20,
+                vehicle_label="Peugeot 307", query="акпп снова не едет на горячую",
+                language="ru", runner=runner,
+            ))
+
+        self.assertFalse(result.reused)
+        runner.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -606,7 +606,7 @@ async def run_search_stages(
                 persisted,
                 quota=subscription,
             )
-            if reused.summary or reused.links or any(reused.evidence.values()):
+            if reused.summary or reused.links or _has_useful_evidence(reused.evidence):
                 return reused
 
     if not can_run:
