@@ -82,6 +82,25 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIn("https://example.com/case", answer)
         self.assertNotIn("Я запустил исследование", answer)
 
+    def test_structured_evidence_is_not_duplicated_by_synthetic_cases(self):
+        answer = core._format_research_answer(
+            "ru",
+            summary="Предварительный вывод",
+            links=[{"title": "Forum", "url": "https://example.com/case"}],
+            evidence={
+                "common_causes": [{"cause": "Падение давления ATF"}],
+                "solutions": [{"title": "Проверка", "description": "Измерить давление"}],
+                "extracted_cases": [{
+                    "cause": "Падение давления ATF",
+                    "solution": "Проверка\nИзмерить давление",
+                }],
+            },
+            sufficient=True,
+        )
+
+        self.assertEqual(answer.count("Падение давления ATF"), 1)
+        self.assertEqual(answer.count("Измерить давление"), 1)
+
     def _run_chat(
         self, message, *, vehicles=None, latest_problem=None, problem=None,
         knowledge=None, research=None, saved_vehicle=True, specs=None, saved_spec=True,

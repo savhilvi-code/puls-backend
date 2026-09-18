@@ -433,9 +433,11 @@ def _format_research_answer(
 
     cases = evidence.get("extracted_cases")
     probable = text_values(evidence.get("common_causes"), "cause")
-    probable.extend(text_values(cases, "cause"))
+    if not probable:
+        probable.extend(text_values(cases, "cause"))
     checks = text_values(evidence.get("solutions"), "title", "description")
-    checks.extend(text_values(cases, "solution"))
+    if not checks:
+        checks.extend(text_values(cases, "solution"))
     less_likely = text_values(evidence.get("unlikely_causes"))
     regional = evidence.get("regional_insights")
     findings = [
