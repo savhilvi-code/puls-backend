@@ -1335,6 +1335,7 @@ async def process_chat_message_v2(
     # Create or update active diagnostic problem.
     # ---------------------------------------------------------------
 
+    problem_created_this_turn = False
     if problem is None:
         problem = repo.save_problem(
             user_id=user.id,
@@ -1347,6 +1348,7 @@ async def process_chat_message_v2(
         )
 
         context.problem = problem
+        problem_created_this_turn = True
 
     else:
         current_symptoms = merge_problem_symptoms(problem.get("symptoms"), text)
@@ -1427,6 +1429,45 @@ async def process_chat_message_v2(
             quota=quota_payload(
                 subscription
             ),
+        )
+
+    # A new diagnostic Problem gets one Fast Chat turn before paid external
+    # research. Later turns can enter Search with the accumulated context.
+    if problem_created_this_turn:
+        context.clarification_question = clarification_for(
+            language,
+            missing="symptom",
+            problem_class=problem_class,
+        )
+        answer = plain_text_response(
+            await _natural_reply(
+                context,
+                recent_messages=recent_messages,
+                fallback=context.clarification_question,
+            )
+        )
+        _save_user_message_and_events(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle=vehicle,
+            problem=problem or {},
+            text=text,
+            language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id,
+            conversation_id=conversation_id,
+            vehicle_id=vehicle.get("id"),
+            problem_id=(problem or {}).get("id"),
+            role="assistant",
+            text=answer,
+            language=language,
+        )
+        return ChatResponse(
+            **response_context,
+            answer=answer,
+            links=[],
+            quota=quota_payload(subscription),
         )
 
     # ---------------------------------------------------------------

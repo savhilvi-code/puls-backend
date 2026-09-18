@@ -234,6 +234,49 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIn("Подтвердите", response.answer)
         mocks["upsert_specs"].assert_not_called()
 
+    def test_first_detailed_diagnostic_does_not_start_external_search(self):
+        response, mocks = self._run_chat(
+            "АКПП работает нормально на холодную, но после прогрева не трогается на первой и второй передаче.",
+            vehicles=[_vehicle()],
+            problem=None,
+        )
+
+        mocks["save_problem"].assert_called_once()
+        mocks["research"].assert_not_called()
+        self.assertTrue(response.answer)
+
+    def test_first_diagnostic_uses_fast_chat_response(self):
+        response, mocks = self._run_chat(
+            "Двигатель троит на горячую и теряет тягу под нагрузкой.",
+            vehicles=[_vehicle()],
+            problem=None,
+        )
+
+        mocks["natural"].assert_awaited_once()
+        self.assertIn("Когда именно", response.answer)
+        mocks["research"].assert_not_called()
+
+    def test_explicit_reference_request_still_starts_search(self):
+        response, mocks = self._run_chat(
+            "Найди в интернете видео как заменить масло.",
+            vehicles=[_vehicle()],
+            problem=None,
+        )
+
+        mocks["research"].assert_awaited_once()
+        self.assertEqual(mocks["research"].call_args.kwargs["trigger_type"], "HOWTO")
+
+    def test_later_contextualized_diagnostic_can_start_search(self):
+        existing = {**_problem(), "symptoms": ["АКПП не трогается после прогрева"]}
+        response, mocks = self._run_chat(
+            "После прогрева давление ATF падает, ошибок нет, первая и вторая передачи буксуют.",
+            vehicles=[_vehicle()],
+            problem=existing,
+        )
+
+        mocks["research"].assert_awaited_once()
+        self.assertEqual(mocks["research"].call_args.kwargs["trigger_type"], "DIAGNOSTIC")
+
 
 if __name__ == "__main__":
     unittest.main()

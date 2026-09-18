@@ -342,6 +342,8 @@ def is_reference_request(text: str) -> bool:
         "где находится", "where is", "расположение", "location",
         "какое масло", "какую жидкость", "what oil", "which oil",
         "спецификац", "допуск масла", "oil specification",
+        "поищи", "найди в интернете", "поиск в интернете",
+        "search online", "web search",
     )
     return any(marker in lowered for marker in request_markers)
 
