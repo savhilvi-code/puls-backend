@@ -339,9 +339,28 @@ def _query_terms(text: str) -> set[str]:
     return {word[:6] for word in words if len(word) >= 4 and word not in stop}
 
 
+def _research_intent(text: str, declared: str = "DIAGNOSTIC") -> str:
+    lowered = " ".join(str(text or "").lower().split())
+    if any(marker in lowered for marker in (
+        "youtube", "ютуб", "видео", "video", "как заменить", "как поменять",
+        "как снять", "как установить", "how to replace", "how to remove",
+        "how to install",
+    )):
+        return "HOWTO"
+    if any(marker in lowered for marker in (
+        "мануал", "manual", "инструкц", "ссылк", "link", "схем", "diagram",
+        "какое масло", "какую жидкость", "what oil", "which oil", "спецификац",
+    )):
+        return "REFERENCE"
+    normalized = str(declared or "DIAGNOSTIC").upper()
+    return normalized if normalized in {"DIAGNOSTIC", "HOWTO", "REFERENCE"} else "DIAGNOSTIC"
+
+
 def _is_persisted_continuation(
     query: str,
     state: dict[str, Any],
+    *,
+    trigger_type: str,
 ) -> bool:
     episode = state.get("episode")
     episode = episode if isinstance(episode, dict) else {}
@@ -349,11 +368,17 @@ def _is_persisted_continuation(
     context = context if isinstance(context, dict) else {}
     previous_query = str(context.get("reason") or "").strip()
     if not previous_query:
-        return True
+        return False
+    current_trigger = str(trigger_type or "DIAGNOSTIC").upper()
+    previous_trigger = str(episode.get("trigger_type") or "DIAGNOSTIC").upper()
+    if previous_trigger != current_trigger:
+        return False
+    if _research_intent(previous_query, previous_trigger) != _research_intent(query, current_trigger):
+        return False
     new_terms = _query_terms(query)
     previous_terms = _query_terms(previous_query)
     if not new_terms or not previous_terms:
-        return True
+        return False
     return bool(new_terms & previous_terms)
 
 
@@ -425,7 +450,6 @@ async def run_search_stages(
     language: str,
     conversation_id: str | None = None,
     trigger_type: str = "DIAGNOSTIC",
-    prefer_existing: bool = False,
     max_stages: int = 3,
     runner: StageRunner = parse_diagnostic,
 ) -> ResearchResult:
@@ -453,9 +477,10 @@ async def run_search_stages(
         if (
             isinstance(persisted, dict)
             and persisted.get("episode")
-            and (
-                prefer_existing
-                or _is_persisted_continuation(query, persisted)
+            and _is_persisted_continuation(
+                query,
+                persisted,
+                trigger_type=trigger_type,
             )
         ):
             reused = _result_from_persisted_research(

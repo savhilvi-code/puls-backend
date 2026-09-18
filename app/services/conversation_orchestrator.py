@@ -1213,8 +1213,6 @@ async def process_chat_message_v2(
     # Create or update active diagnostic problem.
     # ---------------------------------------------------------------
 
-    problem_was_existing = problem is not None
-
     if problem is None:
         problem = repo.save_problem(
             user_id=user.id,
@@ -1333,10 +1331,6 @@ async def process_chat_message_v2(
         language=language,
         conversation_id=conversation_id,
         trigger_type="DIAGNOSTIC",
-        prefer_existing=(
-            problem_was_existing
-            and symptom_has_operating_detail(text)
-        ),
     )
 
     answer = plain_text_response(

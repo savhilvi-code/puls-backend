@@ -122,7 +122,12 @@ class SearchStageV2Tests(unittest.TestCase):
 
     def test_same_problem_clarification_reuses_persisted_research_without_calls_or_quota(self):
         persisted = {
-            "episode": {"id": 77, "final_summary": "Stored conclusion"},
+            "episode": {
+                "id": 77,
+                "final_summary": "Stored conclusion",
+                "trigger_type": "DIAGNOSTIC",
+                "search_context": {"reason": "акпп не едет на горячую"},
+            },
             "runs": [
                 {
                     "sufficient_evidence": True,
