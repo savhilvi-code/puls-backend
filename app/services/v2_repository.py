@@ -10,6 +10,7 @@ from app.database.supabase import (
     get_supabase_client,
     rows,
 )
+from app.services.trace_service import bind_trace, emit_event
 
 
 Uuid = str
@@ -649,6 +650,10 @@ def save_message(
             "Message was not persisted."
         )
 
+    role_name = str(role or "USER").upper()
+    bind_trace(**({"user_message_id": saved.get("id")} if role_name == "USER" else {"assistant_message_id": saved.get("id")}))
+    emit_event("DATABASE", module="v2_repository.save_message", operation="WRITE", from_node="API" if role_name == "USER" else "ANSWER", to_node="messages", table_name="messages", record_id=str(saved.get("id") or "") or None, field_names=["conversation_id", "role", "content", "language", "metadata"], output_data={"role": role_name, "content_excerpt": str(text)[:160]})
+
     client.table("conversations").update(
         {
             "last_message_at": now_iso(),
@@ -1005,6 +1010,7 @@ def create_vehicle_event(
             .limit(1)
             .execute()
         )
+
         if existing:
             return None
     if event_type == "DTC" and str(data.get("title") or "").strip():

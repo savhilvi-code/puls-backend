@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from app.services import v2_repository as repo
+from app.services.trace_service import emit_event
 
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,7 @@ def persist_vehicle_spec_fact(
     *, user_id: str | None, vehicle_id: str | None, fact: VehicleSpecFact,
 ) -> dict[str, Any]:
     specs = repo.get_vehicle_specs(user_id=user_id, vehicle_id=vehicle_id) or {}
+    emit_event("DATABASE", module="vehicle_fact_service", operation="READ", from_node="vehicle_specs", to_node="Vehicle Fact", table_name="vehicle_specs", output_data={"parameter_key": fact.parameter_key, "found": bool(specs.get("items"))})
     existing = next(
         (
             item for item in specs.get("items", [])
@@ -228,6 +230,7 @@ def persist_vehicle_spec_fact(
     else:
         payload["source_type"] = fact.source_type
         payload["metadata"] = {"recommended_source_type": fact.source_type}
+    emit_event("DATABASE", module="vehicle_fact_service", operation="WRITE", status="STARTED", from_node="Vehicle Fact", to_node="vehicle_specs", table_name="vehicle_specs", field_names=list(payload), input_data={"vehicle_id": vehicle_id, "parameter_key": fact.parameter_key, "intended": fact.value, "source": fact.source_type})
     saved = repo.upsert_vehicle_specs(user_id=user_id, vehicle_id=vehicle_id, payload=payload)
     if not saved:
         return {"status": "failed", "saved": saved}
@@ -241,7 +244,9 @@ def persist_vehicle_spec_fact(
         None,
     )
     actual = str((persisted or {}).get(value_field) or "").strip()
-    if actual.casefold() != str(fact.value).strip().casefold():
+    verified = actual.casefold() == str(fact.value).strip().casefold()
+    emit_event("DATABASE", module="vehicle_fact_service", operation="VERIFY", status="COMPLETED" if verified else "FAILED", from_node="vehicle_specs", to_node="Vehicle Fact", table_name="vehicle_specs", record_id=str((persisted or {}).get("id") or "") or None, output_data={"parameter_key": fact.parameter_key, "expected": fact.value, "stored": actual, "verified": verified})
+    if not verified:
         logger.warning(
             "Vehicle spec write verification failed user_id=%s vehicle_id=%s parameter_key=%s",
             user_id, vehicle_id, fact.parameter_key,
@@ -264,6 +269,7 @@ def persist_vehicle_correction(
         aliases.get(str(key), str(key)): value
         for key, value in (values or {}).items()
     }
+    emit_event("DATABASE", module="vehicle_fact_service", operation="WRITE", status="STARTED", from_node="Vehicle Correction", to_node="vehicles", table_name="vehicles", record_id=vehicle_id, field_names=list(canonical), input_data={"intended": canonical, "source": "USER"})
     saved = repo.save_vehicle(user_id=user_id, vehicle_id=vehicle_id, payload=canonical)
     if not saved:
         return {"status": "failed"}
@@ -273,6 +279,7 @@ def persist_vehicle_correction(
         == str(value or "").strip().casefold()
         for key, value in canonical.items()
     )
+    emit_event("DATABASE", module="vehicle_fact_service", operation="VERIFY", status="COMPLETED" if verified else "FAILED", from_node="vehicles", to_node="Vehicle Correction", table_name="vehicles", record_id=vehicle_id, output_data={"expected": canonical, "stored": {key: (fresh or {}).get(key) for key in canonical}, "verified": verified})
     if not verified:
         logger.warning(
             "Vehicle write verification failed user_id=%s vehicle_id=%s fields=%s",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -11,6 +12,7 @@ from app.services.parser_service import (
 )
 from app.services.provider_config import get_search_provider
 from app.services.link_service import sanitize_search_links
+from app.services.trace_service import bind_trace, emit_event
 from app.services.subscription_service import (
     can_run_research,
     consume_research_credit,
@@ -587,6 +589,7 @@ async def run_search_stages(
     max_stages: int | None = None,
     runner: StageRunner = parse_diagnostic,
 ) -> ResearchResult:
+    emit_event("SEARCH", module="search_stage_service", operation="CONTEXT", from_node="Knowledge", to_node="Search Episode", edge_label="MISS → SEARCH", input_data={"trigger_type": trigger_type, "query": query[:240]})
     can_run, subscription = can_run_research(
         user_id=user_id
     )
@@ -647,6 +650,10 @@ async def run_search_stages(
         episode or {}
     ).get("id")
 
+    if episode_id:
+        bind_trace(search_episode_id=episode_id)
+        emit_event("SEARCH_EPISODE", module="search_stage_service", operation="WRITE", from_node="Search Episode", to_node="search_episodes", table_name="search_episodes", record_id=episode_id, output_data={"trigger_type": trigger_type})
+
     if episode_id is None:
         return ResearchResult(
             episode=None,
@@ -681,6 +688,10 @@ async def run_search_stages(
         total_stages + 1,
     ):
         strategy = strategies[stage_number - 1]
+        emit_event("SEARCH_STAGE", module="search_stage_service", operation="SEARCH", status="STARTED", from_node="Search Episode" if stage_number == 1 else f"Stage {stage_number - 1}", to_node=f"Stage {stage_number}", edge_label=strategy["key"], stage_number=stage_number, source_group=strategy["key"], provider=get_search_provider())
+        emit_event("SOURCE_GROUP", module="search_stage_service", operation="CONTEXT", from_node=f"Stage {stage_number}", to_node=strategy["key"], edge_label="SOURCE GROUP", stage_number=stage_number, source_group=strategy["key"])
+        emit_event("PROVIDER", module="search_stage_service", operation="SEARCH", status="STARTED", from_node=strategy["key"], to_node=get_search_provider(), edge_label="PROVIDER", stage_number=stage_number, source_group=strategy["key"], provider=get_search_provider())
+        stage_started = time.monotonic()
         input_context = {
             "vehicle": vehicle_label,
             "query": query,
@@ -830,6 +841,10 @@ async def run_search_stages(
             saved_run
         )
 
+        emit_event("SEARCH_STAGE", module="search_stage_service", operation="RESULT", status=status, from_node=get_search_provider(), to_node="Sources", edge_label=f"{sources_found_count} SOURCES", table_name="search_runs", record_id=str(saved_run.get("id") or "") or None, stage_number=stage_number, source_group=strategy["key"], provider=get_search_provider(), model=str(meta.get("engine") or "") or None, duration_ms=int((time.monotonic() - stage_started) * 1000), output_data={"summary": summary[:500], "source_count": sources_found_count, "relevant_sources": relevant_sources_count, "evidence_state": evidence_state, "sufficient": sufficient}, telemetry=meta)
+        emit_event("EVIDENCE", module="search_stage_service", operation="EVIDENCE", status="COMPLETED" if evidence_state != NO_EVIDENCE else "WARNING", from_node="Sources", to_node="Evidence", edge_label=evidence_state, stage_number=stage_number, source_group=strategy["key"], output_data={"evidence_state": evidence_state, "sufficient": sufficient})
+        emit_event("LLM", module="search_stage_service", operation="RESULT", status=status, from_node="Evidence", to_node="LLM", edge_label="SYNTHESIS", stage_number=stage_number, source_group=strategy["key"], provider=get_search_provider(), model=str(meta.get("engine") or "") or None, telemetry=meta)
+
         previous_evidence.append(
             {
                 "stage_number": stage_number,
@@ -862,6 +877,7 @@ async def run_search_stages(
         )
 
         for link in links:
+            emit_event("SOURCE", module="search_stage_service", operation="RESULT", from_node=f"Stage {stage_number}", to_node="Sources", edge_label="SOURCE", stage_number=stage_number, source_group=strategy["key"], output_data={"title": link.get("title"), "url": link.get("url"), "domain": link.get("domain"), "type": link.get("type"), "retained": True})
             source = repo.upsert_source(
                 link
             )
@@ -872,6 +888,8 @@ async def run_search_stages(
 
             if source_id is None:
                 continue
+
+            emit_event("SOURCE", module="search_stage_service", operation="VERIFY", from_node="sources", to_node="Evidence", edge_label="RETAINED", table_name="sources", record_id=str(source_id), stage_number=stage_number, source_group=strategy["key"], output_data={"source_id": source_id, "title": link.get("title"), "url": link.get("url"), "retained": True})
 
             repo.link_problem_source(
                 user_id=user_id,
@@ -887,6 +905,7 @@ async def run_search_stages(
                     else 0.4
                 ),
             )
+            emit_event("DATABASE", module="search_stage_service", operation="WRITE", from_node="Sources", to_node="problem_sources", table_name="problem_sources", record_id=str(source_id), related_ids={"problem_id": problem_id, "search_run_id": saved_run.get("id")})
 
         if status == "FAILED":
             final_status = "FAILED"
@@ -918,6 +937,7 @@ async def run_search_stages(
 
     if updated_episode:
         episode = updated_episode
+    emit_event("SEARCH_EPISODE", module="search_stage_service", operation="RESULT", status=final_status, from_node="LLM", to_node="ANSWER", edge_label=evidence_state, table_name="search_episodes", record_id=episode_id, output_data={"summary": final_summary[:500], "evidence_state": evidence_state, "stage_count": len(runs)})
 
     # One research request consumes one credit,
     # regardless of how many internal stages ran.

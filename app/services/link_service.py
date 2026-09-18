@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.trace_service import emit_event
+
 VIDEO_DOMAINS = ("youtube.com", "youtu.be", "rutube.ru", "vimeo.com")
 STORAGE_MEDIA_TYPES = {"photo", "video", "audio", "document"}
 BRANDING_MARKERS = (
@@ -75,7 +77,10 @@ def sanitize_search_links(
     result: list[dict] = []
     for item in normalized:
         image = str(item.get("type") or "").lower() in {"image", "photo", "picture"}
+        if image:
+            emit_event("IMAGE", module="link_service", operation="RESULT", from_node="Sources", to_node="Image Candidates", edge_label="CANDIDATE", output_data={**item, "state": "candidate"})
         if image and is_branding_asset(item):
+            emit_event("IMAGE", module="link_service", operation="VERIFY", status="SKIPPED", from_node="Image Candidates", to_node="Rejected Images", edge_label="BRANDING_ASSET", output_data={**item, "state": "rejected", "reason": "branding_asset"})
             continue
         if image and visual_requested and query_terms:
             blob = " ".join(
@@ -83,7 +88,10 @@ def sanitize_search_links(
                 for key in ("url", "title", "description", "source_url")
             )
             if not any(term in blob for term in query_terms):
+                emit_event("IMAGE", module="link_service", operation="VERIFY", status="SKIPPED", from_node="Image Candidates", to_node="Rejected Images", edge_label="QUERY_MISMATCH", output_data={**item, "state": "rejected", "reason": "query_mismatch"})
                 continue
+        if image:
+            emit_event("IMAGE", module="link_service", operation="VERIFY", from_node="Image Candidates", to_node="Selected Images", edge_label="SELECTED", output_data={**item, "state": "selected"})
         result.append(item)
     return result
 

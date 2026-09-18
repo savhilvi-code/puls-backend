@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 
 from typing import Any
 from uuid import UUID
@@ -16,6 +17,7 @@ from app.services.openai_service import (
     generate_natural_chat_reply,
 )
 from app.services.search_stage_service import run_search_stages
+from app.services.trace_service import bind_trace, emit_event
 from app.services.formatter_service import format_technical_answer
 from app.services.subscription_service import (
     ensure_user_subscription,
@@ -352,8 +354,10 @@ async def _natural_reply(
     recent_messages: list[dict[str, Any]] | None = None,
     fallback: str = "",
 ) -> str:
+    started = time.monotonic()
+    emit_event("LLM", module="conversation_orchestrator._natural_reply", operation="CONTEXT", status="STARTED", from_node="Context", to_node="LLM", input_data={"mode": context.mode, "language": context.language, "vehicle": vehicle_label(context.vehicle) if context.vehicle else "", "recent_message_count": len(recent_messages or [])})
     try:
-        return await generate_natural_chat_reply(
+        result = await generate_natural_chat_reply(
             mode=context.mode,
             user_text=context.text,
             language=context.language,
@@ -375,8 +379,11 @@ async def _natural_reply(
                 or context.problem
             ),
         )
+        emit_event("LLM", module="conversation_orchestrator._natural_reply", operation="RESULT", from_node="LLM", to_node="ANSWER", duration_ms=int((time.monotonic() - started) * 1000), output_data={"answer_excerpt": result[:300]})
+        return result
 
     except OpenAIRouterUnavailableError:
+        emit_event("LLM", module="conversation_orchestrator._natural_reply", operation="RESULT", status="WARNING", from_node="LLM", to_node="ANSWER", duration_ms=int((time.monotonic() - started) * 1000), output_data={"fallback": True})
         return fallback
 
 
@@ -828,6 +835,8 @@ async def process_chat_message_v2(
         ),
         payload_language,
     )
+    bind_trace(user_id=user.id, user_label=getattr(user, "email", None))
+    emit_event("AUTH", module="conversation_orchestrator", operation="VERIFY", from_node="API", to_node="User Context", output_data={"authenticated": bool(user.id), "user_id": user.id})
     message_language = detect_language(
         text,
         fallback=conversational_language,
@@ -847,6 +856,7 @@ async def process_chat_message_v2(
     vehicles = repo.list_user_vehicles(
         user_id=user.id
     )
+    emit_event("DATABASE", module="conversation_orchestrator", operation="READ", from_node="vehicles", to_node="Context", table_name="vehicles", affected_rows=len(vehicles), output_data={"count": len(vehicles)})
 
     explicit_vehicle_id = _valid_uuid(
         payload.get("vehicle_id")
@@ -890,6 +900,8 @@ async def process_chat_message_v2(
         )[:500],
     )
     semantic_kind = str(getattr(semantic_intent, "intent", "") or "").upper()
+    bind_trace(intent=semantic_kind)
+    emit_event("CLASSIFIER", module="conversation_orchestrator", operation="RESULT", from_node="Context", to_node="Classifier", edge_label=semantic_kind or "UNKNOWN", output_data={"intent": semantic_kind, "external_search": bool(getattr(semantic_intent, "external_search", False)), "topic_changed": bool(getattr(semantic_intent, "topic_changed", False)), "vehicle_spec_action": getattr(semantic_intent, "vehicle_spec_action", "NONE")})
     relevant_recent_messages = (
         [] if bool(getattr(semantic_intent, "topic_changed", False)) else recent_messages
     )
@@ -957,6 +969,8 @@ async def process_chat_message_v2(
     conversation_id = (
         conversation or {}
     ).get("id")
+    bind_trace(conversation_id=conversation_id, vehicle_id=(conversation or {}).get("vehicle_id"), problem_id=(conversation or {}).get("problem_id"))
+    emit_event("CONTEXT", module="conversation_orchestrator", operation="RESULT", from_node="Classifier", to_node="Conversation", table_name="conversations", record_id=conversation_id, output_data={"mode": mode, "vehicle_id": (conversation or {}).get("vehicle_id"), "problem_id": (conversation or {}).get("problem_id")})
 
     # The existing Conversation is itself canonical context. A clarification
     # may omit problem_id in the request while still belonging to its Problem.
@@ -1591,6 +1605,8 @@ async def process_chat_message_v2(
         problem=problem or {},
         response_context=response_context,
     )
+    bind_trace(vehicle_id=vehicle.get("id"), problem_id=(problem or {}).get("id"), conversation_id=conversation_id)
+    emit_event("PROBLEM", module="conversation_orchestrator", operation="CONTEXT", from_node="Conversation", to_node="Problem", table_name="problems", record_id=str((problem or {}).get("id") or "") or None, output_data={"problem_class": (problem or {}).get("problem_class"), "status": (problem or {}).get("status")})
 
     # ---------------------------------------------------------------
     # Internal PULS knowledge.
@@ -1601,6 +1617,7 @@ async def process_chat_message_v2(
         symptom=text,
         limit=3,
     )
+    emit_event("KNOWLEDGE", module="conversation_orchestrator", operation="READ", from_node="Context", to_node="Knowledge", edge_label="HIT" if knowledge else "MISS", table_name="knowledge_items", affected_rows=len(knowledge), output_data={"state": "HIT" if knowledge else "MISS", "count": len(knowledge)})
 
     if knowledge:
         answer = plain_text_response(
@@ -1701,7 +1718,6 @@ async def process_chat_message_v2(
         conversation_id=conversation_id,
         trigger_type="DIAGNOSTIC",
     )
-
     answer = plain_text_response(
         _format_research_answer(
             language,

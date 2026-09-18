@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services.admin_service import (
@@ -31,6 +32,7 @@ from app.services.admin_inspector_service import (
     list_vehicle_specs,
     list_vehicles,
 )
+from app.services.trace_service import event_stream, get_trace, list_traces
 
 
 router = APIRouter(
@@ -41,6 +43,37 @@ router = APIRouter(
 
 class ChangePlanRequest(BaseModel):
     plan: str
+
+
+@router.get("/knowledge/live-flow/traces")
+async def admin_live_flow_traces(
+    request: Request, limit: int = 50, status: str | None = None,
+    user_id: str | None = None, vehicle_id: str | None = None,
+    intent: str | None = None,
+) -> dict[str, Any]:
+    require_admin(request)
+    return {"items": list_traces(limit=limit, status=status, user_id=user_id, vehicle_id=vehicle_id, intent=intent)}
+
+
+@router.get("/knowledge/live-flow/traces/{trace_id}")
+async def admin_live_flow_trace(trace_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    trace = get_trace(trace_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    return trace
+
+
+@router.get("/knowledge/live-flow/stream")
+async def admin_live_flow_stream(
+    request: Request, trace_id: str, after_sequence: int = 0,
+) -> StreamingResponse:
+    require_admin(request)
+    return StreamingResponse(
+        event_stream(trace_id, request, after_sequence),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/knowledge/overview")

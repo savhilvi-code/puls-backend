@@ -26,6 +26,7 @@ class LinkItem(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    trace_id: str | None = None
     conversation_id: str | None = None
     vehicle_id: str | None = None
     problem_id: str | None = None
