@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 
 from openai import OpenAI
@@ -61,6 +62,108 @@ CHAT_REPLY_JSON_SCHEMA = {
     "required": ["reply"],
     "additionalProperties": False,
 }
+
+
+TURN_INTENT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": ["GENERAL", "META", "DIAGNOSTIC", "REFERENCE", "HOWTO"],
+        },
+        "external_search": {"type": "boolean"},
+        "source_preference": {
+            "type": "string",
+            "enum": ["ANY", "FORUM", "MANUAL", "WEB"],
+        },
+        "visual_requested": {"type": "boolean"},
+        "link_requested": {"type": "boolean"},
+        "resolved_query": {"type": "string"},
+    },
+    "required": [
+        "intent", "external_search", "source_preference", "visual_requested",
+        "link_requested", "resolved_query",
+    ],
+    "additionalProperties": False,
+}
+
+
+@dataclass(frozen=True)
+class TurnIntent:
+    intent: str = "GENERAL"
+    external_search: bool = False
+    source_preference: str = "ANY"
+    visual_requested: bool = False
+    link_requested: bool = False
+    resolved_query: str = ""
+
+
+async def classify_turn_intent(
+    *,
+    user_text: str,
+    language: str,
+    recent_conversation: list[dict] | None = None,
+    active_vehicle: str = "",
+    active_problem: str = "",
+) -> TurnIntent | None:
+    """Classify routing semantically in one language-neutral structured call.
+
+    The compact prior-turn window exists specifically for elliptical follow-ups
+    such as "on a forum" or "give me the link".  Search still receives only the
+    resolved subject, never the full transcript.
+    """
+    if not is_configured():
+        return None
+
+    compact_history = []
+    for item in (recent_conversation or [])[-6:]:
+        compact_history.append({
+            "role": str(item.get("role") or "")[:20],
+            "text": str(item.get("text") or item.get("content") or "")[:500],
+        })
+    payload = {
+        "language": normalize_language_code(language),
+        "user_text": str(user_text or "")[:1200],
+        "recent_conversation": compact_history,
+        "active_vehicle": str(active_vehicle or "")[:240],
+        "active_problem": str(active_problem or "")[:500],
+    }
+    try:
+        response = get_openai_client().responses.create(
+            model="gpt-4o-mini",
+            instructions=(
+                "Classify the current PULS turn by meaning, independently of language. "
+                "REFERENCE means verified technical facts, manuals, specifications, component identification, "
+                "external sources or real visual references. HOWTO means a requested procedure. DIAGNOSTIC means "
+                "investigating a vehicle fault. external_search is true only when the user explicitly asks PULS "
+                "to search/find/check an external forum, manual, web source, link, real image/diagram, or when a "
+                "short follow-up continues such an unresolved request. Resolve elliptical follow-ups from the "
+                "compact history. resolved_query must be a concise standalone query preserving vehicle, component "
+                "or procedure, source preference, visual intent and requested link; do not invent facts. "
+                "Return only JSON."
+            ),
+            input=json.dumps(payload, ensure_ascii=False),
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "puls_turn_intent",
+                    "description": "Semantic routing decision for one PULS turn.",
+                    "schema": TURN_INTENT_JSON_SCHEMA,
+                    "strict": True,
+                }
+            },
+        )
+        data = _extract_json(getattr(response, "output_text", "") or "")
+        return TurnIntent(
+            intent=str(data.get("intent") or "GENERAL").upper(),
+            external_search=bool(data.get("external_search")),
+            source_preference=str(data.get("source_preference") or "ANY").upper(),
+            visual_requested=bool(data.get("visual_requested")),
+            link_requested=bool(data.get("link_requested")),
+            resolved_query=str(data.get("resolved_query") or "").strip()[:1600],
+        )
+    except Exception:
+        return None
 
 
 async def translate_segments(*, segments: list[str], target_language: str) -> list[str]:

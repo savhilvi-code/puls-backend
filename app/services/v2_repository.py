@@ -191,6 +191,12 @@ def save_vehicle(
     if "engine" in data and "engine_code" not in data:
         data["engine_code"] = data.pop("engine")
 
+    if "fuel" in data and "fuel_type" not in data:
+        data["fuel_type"] = data.pop("fuel")
+
+    if "drive" in data and "drivetrain" not in data:
+        data["drivetrain"] = data.pop("drive")
+
     data["user_id"] = user_id
     data["updated_at"] = now_iso()
 

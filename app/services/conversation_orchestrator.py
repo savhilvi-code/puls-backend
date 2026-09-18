@@ -12,6 +12,7 @@ from app.schemas.chat import ChatResponse
 from app.services.auth_service import get_or_create_profile
 from app.services.openai_service import (
     OpenAIRouterUnavailableError,
+    classify_turn_intent,
     generate_natural_chat_reply,
 )
 from app.services.search_stage_service import run_search_stages
@@ -23,6 +24,7 @@ from app.services.subscription_service import (
 from app.services.vehicle_fact_service import (
     extract_vehicle_correction,
     extract_vehicle_spec_fact,
+    persist_vehicle_correction,
     persist_vehicle_spec_fact,
 )
 from app.services.v2_context import (
@@ -34,7 +36,6 @@ from app.services.v2_context import (
     has_automotive_content,
     is_factual_technical_statement,
     is_problem_continuation,
-    is_reference_request,
     is_social_general_text,
     looks_like_meta_question,
     plain_text_response,
@@ -487,37 +488,6 @@ def _format_research_answer(
     )
 
 
-def _has_research_media_intent(text: str) -> bool:
-    lowered = " ".join(str(text or "").lower().split())
-    return any(
-        marker in lowered
-        for marker in (
-            "youtube",
-            "ютуб",
-            "видео",
-            "video",
-            "покажи фото",
-            "покажи изображение",
-            "покажи схему",
-            "как выглядит",
-            "где находится",
-            "image",
-            "photo",
-            "diagram",
-        )
-    )
-
-
-def _search_trigger_type(text: str) -> str:
-    lowered = " ".join(str(text or "").lower().split())
-    howto_markers = (
-        "как заменить", "как поменять", "как снять", "как установить",
-        "how to replace", "how to change", "how to remove", "how to install",
-        "youtube", "ютуб", "видео", "video",
-    )
-    return "HOWTO" if any(marker in lowered for marker in howto_markers) else "REFERENCE"
-
-
 def _compact_problem_search_context(
     *, vehicle: dict[str, Any], problem: dict[str, Any], latest_clarification: str,
 ) -> dict[str, Any]:
@@ -823,15 +793,43 @@ async def process_chat_message_v2(
             ),
         )
 
+    continuation_vehicle_id = next(
+        (
+            _valid_uuid(item.get("vehicle_id"))
+            for item in reversed(recent_messages)
+            if _valid_uuid(item.get("vehicle_id"))
+        ),
+        None,
+    )
+    routing_vehicle_id = explicit_vehicle_id or continuation_vehicle_id or (latest_problem or {}).get("vehicle_id")
+    routing_vehicle = next(
+        (item for item in vehicles if str(item.get("id")) == str(routing_vehicle_id)),
+        vehicles[0] if len(vehicles) == 1 else None,
+    )
+
+    semantic_intent = await classify_turn_intent(
+        user_text=text,
+        language=language,
+        recent_conversation=recent_messages,
+        active_vehicle=vehicle_label(routing_vehicle),
+        active_problem=" ".join(
+            str((latest_problem or {}).get(key) or "")
+            for key in ("title", "problem_class", "component", "symptoms", "current_conclusion")
+        )[:500],
+    )
+    semantic_kind = str(getattr(semantic_intent, "intent", "") or "").upper()
+    semantic_reference = bool(
+        semantic_intent
+        and semantic_intent.external_search
+        and semantic_kind in {"REFERENCE", "HOWTO"}
+    )
+
     mode = "GENERAL_CHAT"
 
-    if looks_like_meta_question(text):
+    if semantic_kind == "META" or (not semantic_intent and looks_like_meta_question(text)):
         mode = "META_CHAT"
 
-    elif vehicle_data_turn or has_automotive_content(text) or (
-        _has_research_media_intent(text)
-        and (explicit_problem_id or explicit_vehicle_id)
-    ) or (
+    elif vehicle_data_turn or semantic_kind in {"DIAGNOSTIC", "REFERENCE", "HOWTO"} or has_automotive_content(text) or (
         is_problem_continuation(text)
         and (explicit_problem_id or conversation_id or latest_problem)
     ):
@@ -840,9 +838,7 @@ async def process_chat_message_v2(
     vehicle, ambiguous_vehicle = (
         resolve_relevant_vehicle(
             vehicles=vehicles,
-            explicit_vehicle_id=(
-                explicit_vehicle_id
-            ),
+            explicit_vehicle_id=(explicit_vehicle_id or continuation_vehicle_id),
             user_text=text,
             latest_problem=latest_problem,
         )
@@ -850,7 +846,10 @@ async def process_chat_message_v2(
     if vehicle_data_turn and vehicle is None and not ambiguous_vehicle and len(vehicles) == 1:
         vehicle = vehicles[0]
 
-    reference_request = is_reference_request(text)
+    if semantic_reference and vehicle is None and not ambiguous_vehicle and len(vehicles) == 1:
+        vehicle = vehicles[0]
+
+    reference_request = semantic_reference
     problem_class = classify_problem(text)
 
     problem = None
@@ -1088,14 +1087,14 @@ async def process_chat_message_v2(
 
     if vehicle_correction:
         try:
-            saved_vehicle = repo.save_vehicle(
+            persistence = persist_vehicle_correction(
                 user_id=user.id,
                 vehicle_id=vehicle.get("id"),
-                payload=vehicle_correction,
+                values=vehicle_correction,
             )
         except (SupabaseOperationError, SupabaseUnavailableError):
-            saved_vehicle = None
-        changed = bool(saved_vehicle)
+            persistence = {"status": "failed"}
+        changed = persistence.get("status") == "saved"
         transmission = str(vehicle_correction.get("transmission") or "")
         transmission_ru = "Автомат" if transmission == "Automatic" else "Механика"
         if str(language or "").lower().startswith("ru"):
@@ -1235,13 +1234,24 @@ async def process_chat_message_v2(
     # HOWTO/REFERENCE may use the vehicle, but never the active diagnostic
     # Problem. A separate reference owner is required by the frozen Search FK.
     if reference_request:
-        reference_problem = resolve_relevant_problem(
-            user_id=user.id,
-            vehicle_id=vehicle.get("id"),
-            explicit_problem_id=None,
-            problem_class="SERVICE_REFERENCE",
-            symptom=text,
-        )
+        reference_problem = None
+        conversation_problem_id = (conversation or {}).get("problem_id")
+        if conversation_problem_id:
+            candidate = repo.get_problem(user_id=user.id, problem_id=conversation_problem_id)
+            if (
+                candidate
+                and str(candidate.get("vehicle_id")) == str(vehicle.get("id"))
+                and str(candidate.get("problem_class") or "").upper() == "SERVICE_REFERENCE"
+            ):
+                reference_problem = candidate
+        if reference_problem is None:
+            reference_problem = resolve_relevant_problem(
+                user_id=user.id,
+                vehicle_id=vehicle.get("id"),
+                explicit_problem_id=None,
+                problem_class="SERVICE_REFERENCE",
+                symptom=str(getattr(semantic_intent, "resolved_query", "") or text),
+            )
         if reference_problem is None:
             reference_problem = repo.save_problem(
                 user_id=user.id,
@@ -1249,20 +1259,27 @@ async def process_chat_message_v2(
                 payload=_reference_problem_payload(text=text, vehicle=vehicle),
             )
 
+        reference_context = _compact_problem_search_context(
+            vehicle=vehicle,
+            problem=reference_problem or {},
+            latest_clarification=text,
+        )
+        reference_context["request"] = {
+            "source_preference": str(getattr(semantic_intent, "source_preference", "ANY")),
+            "visual_requested": bool(getattr(semantic_intent, "visual_requested", False)),
+            "link_requested": bool(getattr(semantic_intent, "link_requested", False)),
+        }
+
         research = await run_search_stages(
             user_id=user.id,
             vehicle_id=vehicle.get("id"),
             problem_id=(reference_problem or {}).get("id"),
             conversation_id=conversation_id,
-            trigger_type=_search_trigger_type(text),
+            trigger_type="HOWTO" if semantic_kind == "HOWTO" else "REFERENCE",
             vehicle_label=vehicle_label(vehicle),
-            query=text,
+            query=str(getattr(semantic_intent, "resolved_query", "") or text),
             language=language,
-            problem_context=_compact_problem_search_context(
-                vehicle=vehicle,
-                problem=reference_problem or {},
-                latest_clarification=text,
-            ),
+            problem_context=reference_context,
         )
         answer = plain_text_response(
             _format_research_answer(

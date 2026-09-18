@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services import conversation_orchestrator as core
 from app.services import v2_context
+from app.services.openai_service import TurnIntent
 
 USER_ID = "11111111-1111-4111-8111-111111111111"
 VEHICLE_ID = "22222222-2222-4222-8222-222222222222"
@@ -104,31 +105,78 @@ class BackendV2ConversationTests(unittest.TestCase):
     def _run_chat(
         self, message, *, vehicles=None, latest_problem=None, problem=None,
         knowledge=None, research=None, saved_vehicle=True, specs=None, saved_spec=True,
+        semantic_intent=None, recent=None, conversation=None,
     ):
         stack = ExitStack()
+        vehicle_rows = [dict(item) for item in (vehicles if vehicles is not None else [])]
+        specs_state = {"value": specs}
+
+        def default_intent(**kwargs):
+            if semantic_intent is not None:
+                return semantic_intent
+            if v2_context.has_automotive_content(message):
+                return TurnIntent(intent="DIAGNOSTIC")
+            return TurnIntent(intent="GENERAL")
+
+        def save_vehicle_state(*, user_id, vehicle_id, payload):
+            if not saved_vehicle:
+                return None
+            row = next((item for item in vehicle_rows if item.get("id") == vehicle_id), None)
+            if row is None:
+                return None
+            if saved_vehicle == "stale":
+                return dict(row)
+            row.update(payload)
+            return dict(row)
+
+        def get_vehicle_state(*, user_id, vehicle_id, **kwargs):
+            row = next(
+                (item for item in vehicle_rows if item.get("id") == vehicle_id and item.get("user_id") == user_id),
+                None,
+            )
+            return dict(row) if row else None
+
+        def upsert_specs_state(*, user_id, vehicle_id, payload):
+            if not saved_spec:
+                return None
+            current = specs_state["value"] or {"vehicle_id": vehicle_id, "items": []}
+            items = current.setdefault("items", [])
+            row = next((item for item in items if item.get("parameter_key") == payload["parameter_key"]), None)
+            if row is None:
+                row = {"id": "spec-1", "vehicle_id": vehicle_id}
+                items.append(row)
+            if saved_spec == "stale":
+                return {**row, **payload}
+            row.update(payload)
+            specs_state["value"] = current
+            return dict(row)
+
         mocks = {
             "profile": stack.enter_context(patch.object(core, "get_or_create_profile", new=AsyncMock(return_value=_user()))),
             "subscription": stack.enter_context(patch.object(core, "ensure_user_subscription", return_value=_sub())),
-            "recent": stack.enter_context(patch.object(core.repo, "recent_conversation_messages", return_value=[])),
-            "vehicles": stack.enter_context(patch.object(core.repo, "list_user_vehicles", return_value=vehicles if vehicles is not None else [])),
+            "recent": stack.enter_context(patch.object(core.repo, "recent_conversation_messages", return_value=recent or [])),
+            "vehicles": stack.enter_context(patch.object(core.repo, "list_user_vehicles", return_value=vehicle_rows)),
             "latest_problem": stack.enter_context(patch.object(core, "_latest_problem_for_context", return_value=latest_problem)),
             "resolve_problem": stack.enter_context(patch.object(core, "resolve_relevant_problem", return_value=problem)),
-            "conversation": stack.enter_context(patch.object(core.repo, "get_or_create_conversation", return_value={"id": CONVERSATION_ID})),
+            "conversation": stack.enter_context(patch.object(core.repo, "get_or_create_conversation", return_value=conversation or {"id": CONVERSATION_ID})),
+            "get_problem": stack.enter_context(patch.object(core.repo, "get_problem", return_value=problem)),
             "associate": stack.enter_context(patch.object(core.repo, "associate_conversation_problem")),
             "save_message": stack.enter_context(patch.object(core.repo, "save_message", return_value={"id": "message-1"})),
             "save_problem": stack.enter_context(patch.object(core.repo, "save_problem", return_value=problem or _problem())),
             "event": stack.enter_context(patch.object(core.repo, "create_vehicle_event")),
             "save_vehicle": stack.enter_context(patch.object(
                 core.repo, "save_vehicle",
-                return_value=(_vehicle() if saved_vehicle is True else saved_vehicle),
+                side_effect=save_vehicle_state,
             )),
+            "get_vehicle": stack.enter_context(patch.object(core.repo, "get_vehicle", side_effect=get_vehicle_state)),
             "get_specs": stack.enter_context(patch.object(
-                core.repo, "get_vehicle_specs", return_value=specs,
+                core.repo, "get_vehicle_specs", side_effect=lambda **kwargs: specs_state["value"],
             )),
             "upsert_specs": stack.enter_context(patch.object(
                 core.repo, "upsert_vehicle_specs",
-                return_value=({"id": "spec-1"} if saved_spec is True else saved_spec),
+                side_effect=upsert_specs_state,
             )),
+            "intent": stack.enter_context(patch.object(core, "classify_turn_intent", new=AsyncMock(side_effect=default_intent))),
             "knowledge": stack.enter_context(patch.object(core.repo, "find_relevant_knowledge", return_value=knowledge or [])),
             "natural": stack.enter_context(patch.object(core, "_natural_reply", new=AsyncMock(side_effect=lambda context, **kwargs: context.clarification_question or "Hi, I am here."))),
             "research": stack.enter_context(
@@ -140,7 +188,10 @@ class BackendV2ConversationTests(unittest.TestCase):
             ),
         }
         try:
-            response = asyncio.run(core.process_chat_message_v2({"message": message, "language": "en"}))
+            payload = {"message": message, "language": "en"}
+            if recent:
+                payload["conversation_id"] = CONVERSATION_ID
+            response = asyncio.run(core.process_chat_message_v2(payload))
             return response, mocks
         finally:
             stack.close()
@@ -217,6 +268,10 @@ class BackendV2ConversationTests(unittest.TestCase):
 
         self.assertIn("изменён", response.answer)
         self.assertEqual(mocks["save_vehicle"].call_args.kwargs["payload"], {"transmission": "Automatic"})
+        self.assertEqual(
+            mocks["get_vehicle"](user_id=USER_ID, vehicle_id=VEHICLE_ID)["transmission"],
+            "Automatic",
+        )
 
     def test_vehicle_correction_does_not_claim_success_when_save_fails(self):
         vehicle = {**_vehicle(), "transmission": "Manual"}
@@ -226,6 +281,40 @@ class BackendV2ConversationTests(unittest.TestCase):
 
         self.assertIn("Не удалось сохранить", response.answer)
         self.assertNotIn("изменён на", response.answer)
+
+    def test_truthy_but_unpersisted_vehicle_write_cannot_claim_success(self):
+        vehicle = {**_vehicle(), "transmission": "Manual"}
+        response, mocks = self._run_chat(
+            "Да, исправь на автомат.", vehicles=[vehicle], saved_vehicle="stale",
+        )
+
+        self.assertIn("Не удалось сохранить", response.answer)
+        fresh = mocks["get_vehicle"](user_id=USER_ID, vehicle_id=VEHICLE_ID)
+        self.assertEqual(fresh["transmission"], "Manual")
+
+    def test_vehicle_correction_is_scoped_to_selected_vehicle(self):
+        other_id = "55555555-5555-4555-8555-555555555555"
+        vehicle_a = {**_vehicle(), "transmission": "Manual"}
+        vehicle_b = {**_vehicle(other_id, "Toyota"), "transmission": "Manual"}
+        response, mocks = self._run_chat(
+            "Да, исправь на автомат.", vehicles=[vehicle_a, vehicle_b],
+            semantic_intent=TurnIntent(intent="DIAGNOSTIC"),
+        )
+        # With two vehicles and no selection the safe behavior is clarification, not mutation.
+        mocks["save_vehicle"].assert_not_called()
+        self.assertTrue(response.answer)
+
+        response, mocks = self._run_chat(
+            "Да, исправь на автомат.", vehicles=[vehicle_a, vehicle_b],
+            semantic_intent=TurnIntent(intent="DIAGNOSTIC"),
+            recent=[{
+                "role": "user", "text": "Toyota X-Trail", "vehicle_id": other_id,
+                "language": "ru", "created_at": "2099-01-01T00:00:00+00:00",
+            }],
+        )
+        self.assertEqual(mocks["save_vehicle"].call_args.kwargs["vehicle_id"], other_id)
+        self.assertEqual(mocks["get_vehicle"](user_id=USER_ID, vehicle_id=VEHICLE_ID)["transmission"], "Manual")
+        self.assertEqual(mocks["get_vehicle"](user_id=USER_ID, vehicle_id=other_id)["transmission"], "Automatic")
 
     def test_user_installed_part_is_saved_as_actual(self):
         response, mocks = self._run_chat(
@@ -247,6 +336,15 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertEqual(payload["recommended_value"], "5W-40")
         self.assertNotIn("actual_value", payload)
         self.assertIn("рекомендованную", response.answer)
+
+    def test_truthy_but_unpersisted_spec_write_cannot_claim_success(self):
+        response, mocks = self._run_chat(
+            "По мануалу рекомендуется масло 5W-40",
+            vehicles=[_vehicle()], saved_spec="stale",
+        )
+
+        self.assertIn("Не удалось сохранить", response.answer)
+        self.assertNotIn("Сохранил", response.answer)
 
     def test_existing_user_confirmed_value_is_not_overwritten(self):
         existing = {
@@ -290,10 +388,83 @@ class BackendV2ConversationTests(unittest.TestCase):
             "Найди в интернете видео как заменить масло.",
             vehicles=[_vehicle()],
             problem=None,
+            semantic_intent=TurnIntent(
+                intent="HOWTO", external_search=True, source_preference="WEB",
+                visual_requested=True, link_requested=True,
+                resolved_query="Nissan X-Trail engine oil replacement video",
+            ),
         )
 
         mocks["research"].assert_awaited_once()
         self.assertEqual(mocks["research"].call_args.kwargs["trigger_type"], "HOWTO")
+
+    def test_russian_and_english_external_requests_use_same_semantic_route(self):
+        decision = TurnIntent(
+            intent="REFERENCE", external_search=True, source_preference="FORUM",
+            link_requested=True, resolved_query="Nissan X-Trail transmission forum source",
+        )
+        for message in ("Найди это на форуме и дай ссылку", "Find this on a forum and give me the link"):
+            with self.subTest(message=message):
+                _, mocks = self._run_chat(message, vehicles=[_vehicle()], semantic_intent=decision)
+                mocks["research"].assert_awaited_once()
+                self.assertEqual(mocks["research"].call_args.kwargs["trigger_type"], "REFERENCE")
+                self.assertEqual(mocks["research"].call_args.kwargs["query"], decision.resolved_query)
+
+    def test_visual_followup_preserves_compact_subject_and_returns_real_links(self):
+        decision = TurnIntent(
+            intent="REFERENCE", external_search=True, source_preference="MANUAL",
+            visual_requested=True, link_requested=True,
+            resolved_query="Nissan X-Trail automatic transmission level-check component manual diagram",
+        )
+        research = SimpleNamespace(
+            summary="Manual illustration found",
+            links=[
+                {"title": "Manual diagram", "url": "https://example.com/diagram.png", "type": "image"},
+                {"title": "Manual page", "url": "https://example.com/manual", "type": "link"},
+            ],
+            evidence={}, sufficient=True, quota=_sub(),
+        )
+        recent = [{
+            "role": "user", "text": "What does the transmission level-check element look like?",
+            "vehicle_id": VEHICLE_ID, "language": "en", "created_at": "2026-09-19T10:00:00+00:00",
+        }]
+        response, mocks = self._run_chat(
+            "Give me the link.", vehicles=[_vehicle()], recent=recent,
+            semantic_intent=decision, research=research,
+        )
+
+        call = mocks["research"].call_args.kwargs
+        self.assertEqual(call["query"], decision.resolved_query)
+        self.assertEqual(call["vehicle_id"], VEHICLE_ID)
+        self.assertEqual(call["problem_context"]["request"]["source_preference"], "MANUAL")
+        self.assertTrue(call["problem_context"]["request"]["visual_requested"])
+        intent_call = mocks["intent"].call_args.kwargs
+        self.assertTrue(intent_call["active_vehicle"])
+        self.assertEqual(intent_call["recent_conversation"][0]["vehicle_id"], VEHICLE_ID)
+        self.assertEqual(response.links[0].url, "https://example.com/diagram.png")
+        mocks["event"].assert_not_called()
+
+    def test_visual_search_with_source_page_only_does_not_fabricate_image(self):
+        decision = TurnIntent(
+            intent="REFERENCE", external_search=True, source_preference="FORUM",
+            visual_requested=True, link_requested=True,
+            resolved_query="Nissan transmission level-check component forum photo",
+        )
+        research = SimpleNamespace(
+            summary="A relevant source page was found",
+            links=[{"title": "Forum source", "url": "https://example.com/forum/thread", "type": "link"}],
+            evidence={}, sufficient=True, quota=_sub(),
+        )
+        response, mocks = self._run_chat(
+            "Find a real picture on a forum.", vehicles=[_vehicle()],
+            semantic_intent=decision, research=research,
+        )
+
+        self.assertEqual(len(response.links), 1)
+        self.assertEqual(response.links[0].url, "https://example.com/forum/thread")
+        self.assertNotIn(".png", response.answer)
+        mocks["research"].assert_awaited_once()
+        mocks["event"].assert_not_called()
 
     def test_later_contextualized_diagnostic_can_start_search(self):
         existing = {**_problem(), "symptoms": ["АКПП не трогается после прогрева"]}

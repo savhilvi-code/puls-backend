@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from app.services import v2_repository as repo
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -161,4 +165,54 @@ def persist_vehicle_spec_fact(
         payload["source_type"] = fact.source_type
         payload["metadata"] = {"recommended_source_type": fact.source_type}
     saved = repo.upsert_vehicle_specs(user_id=user_id, vehicle_id=vehicle_id, payload=payload)
-    return {"status": "saved" if saved else "failed", "saved": saved}
+    if not saved:
+        return {"status": "failed", "saved": saved}
+
+    fresh_specs = repo.get_vehicle_specs(user_id=user_id, vehicle_id=vehicle_id) or {}
+    persisted = next(
+        (
+            item for item in fresh_specs.get("items", [])
+            if str(item.get("parameter_key") or "") == fact.parameter_key
+        ),
+        None,
+    )
+    actual = str((persisted or {}).get(value_field) or "").strip()
+    if actual.casefold() != str(fact.value).strip().casefold():
+        logger.warning(
+            "Vehicle spec write verification failed user_id=%s vehicle_id=%s parameter_key=%s",
+            user_id, vehicle_id, fact.parameter_key,
+        )
+        return {"status": "failed", "saved": saved}
+    return {"status": "saved", "saved": persisted}
+
+
+def persist_vehicle_correction(
+    *, user_id: str | None, vehicle_id: str | None, values: dict[str, Any],
+) -> dict[str, Any]:
+    """Write canonical vehicle fields and prove the result with an owned fresh read."""
+    aliases = {
+        "brand": "make",
+        "engine": "engine_code",
+        "fuel": "fuel_type",
+        "drive": "drivetrain",
+    }
+    canonical = {
+        aliases.get(str(key), str(key)): value
+        for key, value in (values or {}).items()
+    }
+    saved = repo.save_vehicle(user_id=user_id, vehicle_id=vehicle_id, payload=canonical)
+    if not saved:
+        return {"status": "failed"}
+    fresh = repo.get_vehicle(user_id=user_id, vehicle_id=vehicle_id)
+    verified = bool(fresh) and all(
+        str(fresh.get(key) or "").strip().casefold()
+        == str(value or "").strip().casefold()
+        for key, value in canonical.items()
+    )
+    if not verified:
+        logger.warning(
+            "Vehicle write verification failed user_id=%s vehicle_id=%s fields=%s",
+            user_id, vehicle_id, sorted(canonical),
+        )
+        return {"status": "failed"}
+    return {"status": "saved", "vehicle": fresh}
