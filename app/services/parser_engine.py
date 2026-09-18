@@ -180,7 +180,8 @@ GE: avtoportali.ge
 10. Обязательно заполни `links` реальными URL из найденных тем, если хоть один подходящий источник найден
 11. Отвечай на языке запроса пользователя
 
-КРИТИЧЕСКИ ВАЖНО: Верни ТОЛЬКО валидный JSON без markdown и backticks:
+КРИТИЧЕСКИ ВАЖНО: ищи молча. Не печатай ход поиска, переводы запросов, преамбулу или комментарии.
+Верни ТОЛЬКО один компактный валидный JSON без markdown и backticks. summary — не более 500 символов; common_causes, solutions, links и topics_found — не более 4 элементов каждый; каждое description/key_info — не более 300 символов:
 {
   "summary": "Анализ на основе найденных тем форумов",
   "common_causes": [
@@ -263,7 +264,10 @@ def build_allowed_domains(data: DiagnosticRequest) -> list[str]:
 
 
 def _remote_parser_url() -> str:
-    raw = str(os.getenv("PARSER_API_URL", "") or "").strip() or "https://car-diagnostic-api.onrender.com/search"
+    # The remote parser is optional. An unset variable must not silently call
+    # a legacy deployment: production no longer exposes that endpoint and the
+    # implicit fallback added one guaranteed 404 before every paid stage.
+    raw = str(os.getenv("PARSER_API_URL", "") or "").strip()
     if not raw:
         return ""
     lowered = raw.lower().rstrip("/")

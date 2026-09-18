@@ -734,6 +734,7 @@ async def run_search_stages(
             else evidence_state
         )
         sufficient = evidence_state == SUFFICIENT_EVIDENCE
+        result["evidence_state"] = evidence_state
         if status != "COMPLETED":
             reason = "Search provider failed."
         elif evidence_state == NO_EVIDENCE:

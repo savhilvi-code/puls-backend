@@ -58,6 +58,65 @@ def collect_response_text(response) -> str:
     return "".join(parts)
 
 
+def _field(value, name: str, default=None):
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def collect_response_links(response) -> list[dict]:
+    """Collect real provider-returned URLs without depending on prose JSON."""
+    links: list[dict] = []
+    seen: set[str] = set()
+
+    def add(item) -> None:
+        url = str(_field(item, "url", "") or "").strip()
+        if not url or url in seen:
+            return
+        seen.add(url)
+        links.append({
+            "title": str(_field(item, "title", "") or url).strip(),
+            "url": url,
+            "description": str(
+                _field(item, "description", "")
+                or _field(item, "cited_text", "")
+                or ""
+            ).strip()[:600],
+            "type": "link",
+        })
+
+    for block in (_field(response, "content", []) or []):
+        for citation in (_field(block, "citations", []) or []):
+            add(citation)
+        content = _field(block, "content", []) or []
+        if isinstance(content, (list, tuple)):
+            for item in content:
+                add(item)
+                for citation in (_field(item, "citations", []) or []):
+                    add(citation)
+    return links
+
+
+def response_telemetry(response) -> dict:
+    usage = _field(response, "usage", None)
+    telemetry = {
+        "stop_reason": str(_field(response, "stop_reason", "") or ""),
+    }
+    for name in (
+        "input_tokens", "output_tokens", "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ):
+        value = _field(usage, name, None)
+        if isinstance(value, int):
+            telemetry[name] = value
+    server_tools = _field(usage, "server_tool_use", None)
+    if server_tools is not None:
+        web_uses = _field(server_tools, "web_search_requests", None)
+        if isinstance(web_uses, int):
+            telemetry["web_search_requests"] = web_uses
+    return {key: value for key, value in telemetry.items() if value not in (None, "")}
+
+
 def unique_domains(domains: list[str]) -> list[str]:
     result = []
     seen = set()
@@ -143,12 +202,25 @@ def _run_claude_provider(
 
         raw_text = collect_response_text(response)
         result = extract_json(raw_text)
+        provider_links = collect_response_links(response)
+        existing_links = result.get("links") if isinstance(result.get("links"), list) else []
+        result["links"] = unique_links = []
+        seen_urls: set[str] = set()
+        for item in [*existing_links, *provider_links]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            unique_links.append(item)
         result["_meta"] = {
             "engine": "Claude Haiku 4.5 + web_search",
             "mode": mode,
             "allowed_domains": used_domains,
             "fallback_used": fallback_used,
             "version": "7.2",
+            "telemetry": response_telemetry(response),
         }
         return result
     except Exception as error:

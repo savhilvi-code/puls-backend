@@ -141,6 +141,39 @@ class ParserProviderV2Tests(unittest.TestCase):
         self.assertEqual(result["summary"], "local fallback")
         provider_call.assert_called_once()
 
+    def test_unconfigured_remote_parser_does_not_call_legacy_url(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(parser_engine._remote_parser_url(), "")
+
+    def test_claude_provider_preserves_citation_links_and_usage(self):
+        citation = SimpleNamespace(
+            url="https://example.com/forum/case",
+            title="Forum case",
+            cited_text="Pressure drops when hot",
+        )
+        response = SimpleNamespace(
+            content=[SimpleNamespace(text='{"summary":"Useful result"}', citations=[citation])],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(
+                input_tokens=500,
+                output_tokens=120,
+                server_tool_use=SimpleNamespace(web_search_requests=1),
+            ),
+        )
+        client = SimpleNamespace(messages=SimpleNamespace(create=Mock(return_value=response)))
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test"}, clear=False),
+            patch.object(search_provider, "anthropic", SimpleNamespace(Anthropic=Mock(return_value=client))),
+        ):
+            result = search_provider._run_claude_provider(
+                data=_request(), user_message="message", allowed_domains=["example.com"],
+                fallback_domains=[], system_prompt="prompt", extract_json=parser_engine.extract_json,
+            )
+
+        self.assertEqual(result["links"][0]["url"], "https://example.com/forum/case")
+        self.assertEqual(result["_meta"]["telemetry"]["output_tokens"], 120)
+        self.assertEqual(result["_meta"]["telemetry"]["web_search_requests"], 1)
+
     def test_ordinary_and_deep_provider_limits_are_bounded(self):
         client = SimpleNamespace(messages=SimpleNamespace(create=Mock(return_value=SimpleNamespace(content=[]))))
         search_provider.run_claude_search(client, _request("normal"), "message", ["example.com"], system_prompt="prompt")
@@ -213,6 +246,26 @@ class ParserProviderV2Tests(unittest.TestCase):
 
         self.assertEqual(result["parser_summary"], "Hot ATF pressure loss is reported")
         self.assertEqual(result["links"][0]["url"], "https://example.com/forum/thread-42")
+        self.assertTrue(result["_raw"]["_malformed_payload_recovered"])
+
+    def test_truncated_provider_json_recovers_completed_evidence_arrays(self):
+        raw = (
+            'Начинаю поиск {"summary":"Hot ATF pressure loss",'
+            '"common_causes":[{"cause":"Valve body pressure loss"}],'
+            '"solutions":[{"title":"Measure line pressure"'
+        )
+        with patch.object(
+            parser_service,
+            "diagnose",
+            new=AsyncMock(return_value={
+                "summary": raw,
+                "links": [{"title": "Case", "url": "https://example.com/case"}],
+            }),
+        ):
+            result = asyncio.run(parser_service.parse_diagnostic({"query": "gearbox hot"}))
+
+        self.assertEqual(result["parser_summary"], "Hot ATF pressure loss")
+        self.assertEqual(result["common_causes"][0]["cause"], "Valve body pressure loss")
         self.assertTrue(result["_raw"]["_malformed_payload_recovered"])
 
 

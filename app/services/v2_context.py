@@ -744,15 +744,17 @@ def extract_technical_events(
 
     if is_factual_technical_statement(source):
         symptom = normalize_technical_symptom(source)
-        events.append(
-            {
-                "event_type": technical_event_type(source),
+        event_type = technical_event_type(source)
+        # A reported symptom belongs to Problem memory. Journal rows are only
+        # for performed/observed vehicle-history facts.
+        if event_type != "SYMPTOM":
+            events.append({
+                "event_type": event_type,
                 "title": symptom[:160],
                 "details": {
                     "source_text": symptom[:500],
                 },
                 "source_kind": "USER",
-            }
-        )
+            })
 
     return events

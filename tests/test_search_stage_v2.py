@@ -102,6 +102,10 @@ class SearchStageV2Tests(unittest.TestCase):
         self.assertEqual([run["stage_number"] for run in saved_runs], [1, 2])
         self.assertFalse(saved_runs[0]["sufficient_evidence"])
         self.assertTrue(saved_runs[1]["sufficient_evidence"])
+        self.assertEqual(
+            saved_runs[1]["result_data"]["evidence_state"],
+            stages.SUFFICIENT_EVIDENCE,
+        )
 
     def test_accumulated_evidence_participates_in_later_sufficiency(self):
         runner = AsyncMock(side_effect=[

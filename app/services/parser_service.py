@@ -441,7 +441,7 @@ def _has_usable_payload(data: dict) -> bool:
 
 
 def _recover_malformed_payload_text(text: str) -> dict:
-    """Recover only explicit summary text and complete URLs; never infer facts."""
+    """Recover only complete literal fields from malformed provider output."""
     raw = str(text or "").strip()
     if not raw:
         return {}
@@ -488,7 +488,37 @@ def _recover_malformed_payload_text(text: str) -> dict:
         recovered["parser_summary"] = summary[:2000]
     if links:
         recovered["links"] = links
+    decoder = json.JSONDecoder()
+    for field in ("common_causes", "solutions", "unlikely_causes", "topics_found"):
+        match = re.search(rf'"{field}"\s*:\s*', raw, re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            value, _ = decoder.raw_decode(raw[match.end():].lstrip())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, list) and value:
+            recovered[field] = value
     return recovered
+
+
+def _strict_embedded_payload(text: str) -> dict | None:
+    cleaned = re.sub(r"```(?:json)?\s*", "", str(text or ""))
+    cleaned = re.sub(r"```\s*", "", cleaned).strip()
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", cleaned):
+        try:
+            value, _ = decoder.raw_decode(cleaned[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and any(
+            key in value for key in (
+                "summary", "recommendation", "common_causes", "solutions",
+                "links", "topics_found",
+            )
+        ):
+            return value
+    return None
 
 
 def _merge_embedded_json_payload(data: dict) -> dict:
@@ -502,7 +532,7 @@ def _merge_embedded_json_payload(data: dict) -> dict:
             recovery_texts.append(text)
         if "{" not in text or "}" not in text:
             continue
-        parsed = extract_json(text)
+        parsed = _strict_embedded_payload(text)
         if not isinstance(parsed, dict):
             continue
         if not any(parsed.get(field) for field in ("summary", "recommendation", "common_causes", "solutions", "links", "topics_found")):
@@ -535,6 +565,9 @@ def _merge_embedded_json_payload(data: dict) -> dict:
             recovered["parser_summary"] = partial["parser_summary"]
         if partial.get("links"):
             recovered.setdefault("links", []).extend(partial["links"])
+        for field in ("common_causes", "solutions", "unlikely_causes", "topics_found"):
+            if partial.get(field) and not recovered.get(field):
+                recovered[field] = partial[field]
     if not recovered:
         return data
     merged = dict(data)
@@ -542,6 +575,9 @@ def _merge_embedded_json_payload(data: dict) -> dict:
         merged["parser_summary"] = recovered["parser_summary"]
     if recovered.get("links"):
         merged["links"] = _normalize_links(recovered["links"])
+    for field in ("common_causes", "solutions", "unlikely_causes", "topics_found"):
+        if recovered.get(field):
+            merged[field] = recovered[field]
     merged["_malformed_payload_recovered"] = True
     return merged
 

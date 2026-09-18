@@ -36,6 +36,20 @@ class BackendV2ConversationTests(unittest.TestCase):
             [],
         )
 
+    def test_plain_diagnostic_symptom_stays_in_problem_memory_not_journal(self):
+        self.assertEqual(
+            v2_context.extract_technical_events(
+                "На холодную АКПП едет, после прогрева не трогается"
+            ),
+            [],
+        )
+
+    def test_completed_check_remains_a_vehicle_event(self):
+        events = v2_context.extract_technical_events(
+            "Проверили давление АТФ: после прогрева оно падает"
+        )
+        self.assertEqual(events[0]["event_type"], "CHECK")
+
     def test_transmission_clarification_reuses_single_problem(self):
         transmission = {
             **_problem(),
@@ -153,11 +167,7 @@ class BackendV2ConversationTests(unittest.TestCase):
 
         self.assertIn("Where is the noise", response.answer)
         mocks["save_problem"].assert_called_once()
-        mocks["event"].assert_called()
-        self.assertEqual(
-            mocks["event"].call_args.kwargs["payload"]["source_message_id"],
-            "message-1",
-        )
+        mocks["event"].assert_not_called()
         mocks["associate"].assert_called_once()
         mocks["research"].assert_not_called()
 
