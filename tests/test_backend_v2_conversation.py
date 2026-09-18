@@ -109,7 +109,9 @@ class BackendV2ConversationTests(unittest.TestCase):
     ):
         stack = ExitStack()
         vehicle_rows = [dict(item) for item in (vehicles if vehicles is not None else [])]
-        specs_state = {"value": specs}
+        specs_state = {
+            str(vehicle_rows[0].get("id")): specs
+        } if vehicle_rows and specs is not None else {}
 
         def default_intent(**kwargs):
             if semantic_intent is not None:
@@ -139,7 +141,7 @@ class BackendV2ConversationTests(unittest.TestCase):
         def upsert_specs_state(*, user_id, vehicle_id, payload):
             if not saved_spec:
                 return None
-            current = specs_state["value"] or {"vehicle_id": vehicle_id, "items": []}
+            current = specs_state.get(str(vehicle_id)) or {"vehicle_id": vehicle_id, "items": []}
             items = current.setdefault("items", [])
             row = next((item for item in items if item.get("parameter_key") == payload["parameter_key"]), None)
             if row is None:
@@ -148,7 +150,7 @@ class BackendV2ConversationTests(unittest.TestCase):
             if saved_spec == "stale":
                 return {**row, **payload}
             row.update(payload)
-            specs_state["value"] = current
+            specs_state[str(vehicle_id)] = current
             return dict(row)
 
         mocks = {
@@ -170,7 +172,7 @@ class BackendV2ConversationTests(unittest.TestCase):
             )),
             "get_vehicle": stack.enter_context(patch.object(core.repo, "get_vehicle", side_effect=get_vehicle_state)),
             "get_specs": stack.enter_context(patch.object(
-                core.repo, "get_vehicle_specs", side_effect=lambda **kwargs: specs_state["value"],
+                core.repo, "get_vehicle_specs", side_effect=lambda **kwargs: specs_state.get(str(kwargs.get("vehicle_id"))),
             )),
             "upsert_specs": stack.enter_context(patch.object(
                 core.repo, "upsert_vehicle_specs",
@@ -186,6 +188,7 @@ class BackendV2ConversationTests(unittest.TestCase):
                     new=AsyncMock(return_value=research or SimpleNamespace(summary="evidence summary", links=[], sufficient=True, quota=_sub())),
                 )
             ),
+            "specs_state": specs_state,
         }
         try:
             payload = {"message": message, "language": "en"}
@@ -465,6 +468,100 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertNotIn(".png", response.answer)
         mocks["research"].assert_awaited_once()
         mocks["event"].assert_not_called()
+
+    def test_wheel_topic_change_does_not_replay_transmission_search(self):
+        specs = {"vehicle_id": VEHICLE_ID, "items": [{
+            "parameter_key": "wheel_rim_size", "parameter_name": "Wheel/rim size",
+            "actual_value": "R16", "source_type": "USER",
+        }]}
+        recent = [
+            {"role": "user", "text": "Find the transmission dipstick picture", "vehicle_id": VEHICLE_ID, "language": "en", "created_at": "2099-01-01T00:00:00+00:00"},
+            {"role": "assistant", "text": "Transmission visual result", "vehicle_id": VEHICLE_ID, "language": "en", "created_at": "2099-01-01T00:01:00+00:00"},
+        ]
+        decision = TurnIntent(
+            intent="REFERENCE", external_search=False, continues_previous_request=False, topic_changed=True,
+            vehicle_spec_action="LOOKUP", vehicle_spec_keys=("wheel_rim_size", "tire_size"),
+            resolved_query="stored wheel size for Nissan X-Trail",
+        )
+        response, mocks = self._run_chat(
+            "Remind me what wheels I have on the car", vehicles=[_vehicle()],
+            recent=recent, specs=specs, semantic_intent=decision,
+        )
+
+        self.assertIn("R16", response.answer)
+        self.assertNotIn("Transmission visual result", response.answer)
+        mocks["research"].assert_not_called()
+        mocks["event"].assert_not_called()
+        mocks["save_problem"].assert_not_called()
+
+    def test_known_rim_diameter_is_used_without_inventing_full_tire_size(self):
+        recent = [{
+            "role": "user", "text": "У меня на машине R16 колёса", "vehicle_id": VEHICLE_ID,
+            "language": "ru", "created_at": "2099-01-01T00:00:00+00:00",
+        }]
+        decision = TurnIntent(
+            intent="REFERENCE", vehicle_spec_action="LOOKUP",
+            vehicle_spec_keys=("wheel_rim_size", "tire_size"),
+        )
+        response, mocks = self._run_chat(
+            "Напомни, какие у меня колёса?", vehicles=[_vehicle()], recent=recent,
+            semantic_intent=decision,
+        )
+
+        self.assertIn("R16", response.answer)
+        self.assertNotIn("205/55", response.answer)
+        self.assertIn("не подтверждён", response.answer)
+        mocks["research"].assert_not_called()
+
+    def test_save_actual_wheel_and_recommended_pressures_with_readback(self):
+        recent = [
+            {"role": "user", "text": "У меня стоят шины 205/55 R16", "vehicle_id": VEHICLE_ID, "language": "ru", "created_at": "2099-01-01T00:00:00+00:00"},
+            {"role": "assistant", "text": "По мануалу рекомендуется давление: спереди 2.2 bar, сзади 2.0 bar", "vehicle_id": VEHICLE_ID, "language": "ru", "created_at": "2099-01-01T00:01:00+00:00"},
+        ]
+        decision = TurnIntent(
+            intent="REFERENCE", vehicle_spec_action="SAVE",
+            vehicle_spec_keys=("tire_size", "tire_pressure_front", "tire_pressure_rear"),
+        )
+        response, mocks = self._run_chat(
+            "Отлично, добавь эти данные в профиль автомобиля", vehicles=[_vehicle()],
+            recent=recent, semantic_intent=decision,
+        )
+
+        rows = mocks["specs_state"][VEHICLE_ID]["items"]
+        by_key = {row["parameter_key"]: row for row in rows}
+        self.assertEqual(by_key["tire_size"]["actual_value"], "205/55R16")
+        self.assertEqual(by_key["tire_pressure_front"]["recommended_value"], "2.2 bar")
+        self.assertEqual(by_key["tire_pressure_rear"]["recommended_value"], "2.0 bar")
+        self.assertEqual(by_key["tire_pressure_front"]["metadata"]["recommended_source_type"], "MANUAL")
+        self.assertIn("Сохранил", response.answer)
+        mocks["event"].assert_not_called()
+        mocks["save_problem"].assert_not_called()
+
+    def test_wheel_specs_are_isolated_between_two_owned_vehicles(self):
+        other_id = "55555555-5555-4555-8555-555555555555"
+        recent = [{
+            "role": "user", "text": "У меня стоят шины 205/55 R16", "vehicle_id": other_id,
+            "language": "ru", "created_at": "2099-01-01T00:00:00+00:00",
+        }]
+        decision = TurnIntent(
+            intent="REFERENCE", vehicle_spec_action="SAVE", vehicle_spec_keys=("tire_size",),
+        )
+        _, mocks = self._run_chat(
+            "Добавь этот размер в профиль", vehicles=[_vehicle(), _vehicle(other_id, "Toyota")],
+            recent=recent, semantic_intent=decision,
+        )
+
+        self.assertNotIn(VEHICLE_ID, mocks["specs_state"])
+        self.assertEqual(mocks["specs_state"][other_id]["items"][0]["actual_value"], "205/55R16")
+
+    def test_visual_continuation_explicitly_allows_reuse(self):
+        decision = TurnIntent(
+            intent="REFERENCE", external_search=True, source_preference="FORUM",
+            visual_requested=True, link_requested=True, continues_previous_request=True,
+            resolved_query="Nissan transmission dipstick forum source link",
+        )
+        _, mocks = self._run_chat("Give me the link", vehicles=[_vehicle()], semantic_intent=decision)
+        self.assertTrue(mocks["research"].call_args.kwargs["allow_reuse"])
 
     def test_later_contextualized_diagnostic_can_start_search(self):
         existing = {**_problem(), "symptoms": ["АКПП не трогается после прогрева"]}

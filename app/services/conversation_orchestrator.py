@@ -24,6 +24,7 @@ from app.services.subscription_service import (
 from app.services.vehicle_fact_service import (
     extract_vehicle_correction,
     extract_vehicle_spec_fact,
+    extract_wheel_spec_facts,
     persist_vehicle_correction,
     persist_vehicle_spec_fact,
 )
@@ -520,6 +521,77 @@ def _compact_problem_search_context(
     }
 
 
+def _wheel_facts_from_context(
+    *, text: str, recent_messages: list[dict[str, Any]], save_requested: bool,
+) -> list[Any]:
+    facts = extract_wheel_spec_facts(text)
+    if not save_requested:
+        return facts
+
+    # A user's explicit installed statement is actual. An assistant statement
+    # is eligible only when it explicitly carries recommendation provenance.
+    for item in reversed(recent_messages[-8:]):
+        role = str(item.get("role") or "").lower()
+        candidate = str(item.get("text") or item.get("content") or "")
+        extracted = extract_wheel_spec_facts(candidate)
+        if role == "user":
+            facts.extend(fact for fact in extracted if fact.value_kind == "actual")
+        elif role == "assistant":
+            facts.extend(fact for fact in extracted if fact.value_kind == "recommended")
+
+    # The newest exact value for each provenance/key wins. Actual and
+    # recommended values intentionally remain independent.
+    unique: dict[tuple[str, str], Any] = {}
+    for fact in reversed(facts):
+        unique.setdefault((fact.parameter_key, fact.value_kind), fact)
+    return list(reversed(unique.values()))
+
+
+def _stored_spec_answer(
+    language: str,
+    *,
+    specs: dict[str, Any] | None,
+    requested_keys: tuple[str, ...],
+    conversation_facts: list[Any],
+) -> str:
+    items = (specs or {}).get("items") if isinstance(specs, dict) else []
+    items = items if isinstance(items, list) else []
+    wanted = set(requested_keys)
+    selected = [
+        item for item in items
+        if not wanted or str(item.get("parameter_key") or "") in wanted
+    ]
+    ru = str(language or "").lower().startswith("ru")
+    lines: list[str] = []
+    for item in selected:
+        name = str(item.get("parameter_name") or item.get("parameter_key") or "")
+        actual = str(item.get("actual_value") or "").strip()
+        recommended = str(item.get("recommended_value") or "").strip()
+        if actual:
+            lines.append(f"{name}: {actual} ({'фактически установлено' if ru else 'used on this vehicle'})")
+        if recommended:
+            lines.append(f"{name}: {recommended} ({'рекомендовано' if ru else 'recommended'})")
+    if lines:
+        return "\n".join(lines)
+
+    remembered = [
+        fact for fact in conversation_facts
+        if fact.value_kind == "actual" and (not wanted or fact.parameter_key in wanted)
+    ]
+    if remembered:
+        values = ", ".join(fact.value for fact in remembered)
+        return (
+            f"Вы ранее указали для этого автомобиля: {values}. Полный размер шины не подтверждён, если указан только диаметр диска."
+            if ru else
+            f"You previously stated for this vehicle: {values}. The full tire size is not confirmed when only the rim diameter is known."
+        )
+    return (
+        "Для этого автомобиля подтверждённые данные о колёсах пока не сохранены."
+        if ru else
+        "No confirmed wheel data is stored for this vehicle yet."
+    )
+
+
 def _transmission_conflict(vehicle: dict[str, Any], text: str) -> bool:
     stored = " ".join(str(vehicle.get("transmission") or "").lower().split())
     lowered = " ".join(str(text or "").lower().split())
@@ -818,6 +890,12 @@ async def process_chat_message_v2(
         )[:500],
     )
     semantic_kind = str(getattr(semantic_intent, "intent", "") or "").upper()
+    relevant_recent_messages = (
+        [] if bool(getattr(semantic_intent, "topic_changed", False)) else recent_messages
+    )
+    vehicle_spec_action = str(getattr(semantic_intent, "vehicle_spec_action", "NONE") or "NONE").upper()
+    semantic_spec_turn = vehicle_spec_action in {"LOOKUP", "SAVE"}
+    vehicle_data_turn = vehicle_data_turn or semantic_spec_turn
     semantic_reference = bool(
         semantic_intent
         and semantic_intent.external_search
@@ -966,7 +1044,7 @@ async def process_chat_message_v2(
         answer = plain_text_response(
             await _natural_reply(
                 context,
-                recent_messages=recent_messages,
+                recent_messages=relevant_recent_messages,
                 fallback=fallback,
             )
         )
@@ -1119,42 +1197,96 @@ async def process_chat_message_v2(
         )
         return ChatResponse(**response_context, answer=answer, links=[], quota=quota_payload(subscription))
 
-    if vehicle_spec_fact:
-        try:
-            result = persist_vehicle_spec_fact(
-                user_id=user.id,
-                vehicle_id=vehicle.get("id"),
-                fact=vehicle_spec_fact,
-            )
-        except (SupabaseOperationError, SupabaseUnavailableError):
-            result = {"status": "failed"}
-        status = result["status"]
-        if status == "conflict":
+    wheel_context_facts = _wheel_facts_from_context(
+        text=text,
+        recent_messages=recent_messages,
+        save_requested=vehicle_spec_action == "SAVE",
+    )
+    requested_spec_keys = tuple(getattr(semantic_intent, "vehicle_spec_keys", ()) or ())
+
+    if vehicle_spec_action == "LOOKUP":
+        answer = _stored_spec_answer(
+            language,
+            specs=repo.get_vehicle_specs(user_id=user.id, vehicle_id=vehicle.get("id")),
+            requested_keys=requested_spec_keys,
+            conversation_facts=_wheel_facts_from_context(
+                text=text, recent_messages=recent_messages, save_requested=True,
+            ),
+        )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="user", text=text, language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="assistant", text=answer, language=language,
+        )
+        return ChatResponse(**response_context, answer=answer, links=[], quota=quota_payload(subscription))
+
+    facts_to_save = wheel_context_facts or ([vehicle_spec_fact] if vehicle_spec_fact else [])
+    if requested_spec_keys:
+        facts_to_save = [fact for fact in facts_to_save if fact.parameter_key in set(requested_spec_keys)]
+
+    if vehicle_spec_action == "SAVE" and not facts_to_save:
+        answer = (
+            "Не удалось определить точное подтверждённое значение. Данные не сохранены — укажите точный размер или давление."
+            if str(language or "").lower().startswith("ru") else
+            "No exact confirmed value could be identified. Nothing was saved; please provide the exact size or pressure."
+        )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="user", text=text, language=message_language,
+        )
+        repo.save_message(
+            user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
+            problem_id=None, role="assistant", text=answer, language=language,
+        )
+        return ChatResponse(**response_context, answer=answer, links=[], quota=quota_payload(subscription))
+
+    if facts_to_save:
+        results: list[tuple[Any, dict[str, Any]]] = []
+        for fact in facts_to_save:
+            try:
+                result = persist_vehicle_spec_fact(
+                    user_id=user.id,
+                    vehicle_id=vehicle.get("id"),
+                    fact=fact,
+                )
+            except (SupabaseOperationError, SupabaseUnavailableError):
+                result = {"status": "failed"}
+            results.append((fact, result))
+
+        conflict = next(((fact, result) for fact, result in results if result.get("status") == "conflict"), None)
+        saved_facts = [fact for fact, result in results if result.get("status") == "saved"]
+        failed = [fact for fact, result in results if result.get("status") == "failed"]
+        if conflict:
+            _, result = conflict
             answer = (
                 f"Сейчас сохранено «{result['existing']}». Подтвердите, что нужно заменить на «{result['requested']}»."
                 if str(language or "").lower().startswith("ru") else
                 f"The saved value is {result['existing']}. Please confirm replacing it with {result['requested']}."
             )
-        elif status == "saved":
-            actual = vehicle_spec_fact.value_kind == "actual"
+        elif failed:
+            answer = (
+                "Не удалось сохранить и подтвердить все параметры. Неподтверждённые значения не считаются добавленными в карточку."
+                if str(language or "").lower().startswith("ru") else
+                "Saving all parameters could not be verified. Unverified values are not reported as added to the vehicle card."
+            )
+        else:
+            values = ", ".join(fact.value for fact in saved_facts)
+            actual_only = all(fact.value_kind == "actual" for fact in saved_facts)
             if str(language or "").lower().startswith("ru"):
                 answer = (
-                    f"Сохранил «{vehicle_spec_fact.value}» как фактически используемое на автомобиле."
-                    if actual else
-                    f"Сохранил «{vehicle_spec_fact.value}» как рекомендованную спецификацию."
+                    f"Сохранил «{values}» как фактически используемое на автомобиле."
+                    if actual_only else
+                    f"Сохранил проверенные значения: {values}. Фактические данные и рекомендованную спецификацию записал раздельно."
                 )
             else:
                 answer = (
-                    f"Saved {vehicle_spec_fact.value} as used on this vehicle."
-                    if actual else
-                    f"Saved {vehicle_spec_fact.value} as a recommended specification."
+                    f"Saved {values} as used on this vehicle."
+                    if actual_only else
+                    f"Saved the verified values: {values}. Actual and recommended data were stored separately."
                 )
-        else:
-            answer = (
-                "Не удалось сохранить параметр. Карточка автомобиля не изменена."
-                if str(language or "").lower().startswith("ru") else
-                "The parameter could not be saved. The vehicle card was not changed."
-            )
         repo.save_message(
             user_id=user.id, conversation_id=conversation_id, vehicle_id=vehicle.get("id"),
             problem_id=None, role="user", text=text, language=message_language,
@@ -1203,7 +1335,7 @@ async def process_chat_message_v2(
         answer = plain_text_response(
             await _natural_reply(
                 context,
-                recent_messages=recent_messages,
+                recent_messages=relevant_recent_messages,
                 fallback=_natural_fallback("GENERAL", language),
             )
         )
@@ -1276,20 +1408,40 @@ async def process_chat_message_v2(
             problem_id=(reference_problem or {}).get("id"),
             conversation_id=conversation_id,
             trigger_type="HOWTO" if semantic_kind == "HOWTO" else "REFERENCE",
+            allow_reuse=bool(getattr(semantic_intent, "continues_previous_request", False)),
             vehicle_label=vehicle_label(vehicle),
             query=str(getattr(semantic_intent, "resolved_query", "") or text),
             language=language,
             problem_context=reference_context,
         )
-        answer = plain_text_response(
-            _format_research_answer(
-                language,
-                summary=research.summary,
-                links=research.links,
-                evidence=getattr(research, "evidence", {}),
-                sufficient=research.sufficient,
+        visual_requested = bool(getattr(semantic_intent, "visual_requested", False))
+        image_links = [
+            item for item in research.links
+            if str(item.get("type") or "").lower() in {"image", "photo", "picture"}
+        ]
+        if visual_requested and not image_links:
+            if research.links:
+                answer = (
+                    "Надёжный прямой URL изображения получить не удалось. Вот страница-источник, где доступен материал."
+                    if str(language or "").lower().startswith("ru") else
+                    "A reliable direct image URL was not retrieved. Here is the source page containing the material."
+                )
+            else:
+                answer = (
+                    "Надёжное изображение по этому запросу не найдено."
+                    if str(language or "").lower().startswith("ru") else
+                    "No reliable image was found for this request."
+                )
+        else:
+            answer = plain_text_response(
+                _format_research_answer(
+                    language,
+                    summary=research.summary,
+                    links=research.links,
+                    evidence=getattr(research, "evidence", {}),
+                    sufficient=research.sufficient,
+                )
             )
-        )
         repo.save_message(
             user_id=user.id,
             conversation_id=conversation_id,
@@ -1498,7 +1650,7 @@ async def process_chat_message_v2(
         answer = plain_text_response(
             await _natural_reply(
                 context,
-                recent_messages=recent_messages,
+                recent_messages=relevant_recent_messages,
                 fallback=context.clarification_question,
             )
         )

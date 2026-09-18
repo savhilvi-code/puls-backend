@@ -27,9 +27,9 @@ _CHANGE_MARKERS = (
     "correct", "change", "replace", "set", "update",
 )
 _ACTUAL_MARKERS = (
-    "у меня стоит", "у меня стоят", "установлен", "установлены", "поставил",
+    "у меня стоит", "у меня стоят", "у меня", "установлен", "установлены", "поставил",
     "поставлены", "залито", "использую", "лью", "фактически",
-    "installed", "fitted", "i use", "filled with", "actually uses",
+    "installed", "fitted", "i use", "i have", "filled with", "actually uses",
 )
 _RECOMMENDED_MARKERS = (
     "рекомендуется", "рекомендовано", "по мануалу", "по руководству", "по каталогу",
@@ -61,6 +61,75 @@ def _part_value(text: str, pattern: str) -> str:
     return " ".join(match.group(1).strip(" .,:;").split()) if match else ""
 
 
+def extract_wheel_spec_facts(
+    text: str,
+    *,
+    value_kind: str | None = None,
+    source_type: str | None = None,
+) -> list[VehicleSpecFact]:
+    """Extract exact wheel values without expanding a rim diameter into a tire size."""
+    source = " ".join(str(text or "").strip().split())
+    lowered = source.lower()
+    actual = any(marker in lowered for marker in _ACTUAL_MARKERS)
+    recommended = any(marker in lowered for marker in _RECOMMENDED_MARKERS)
+    kind = value_kind or ("actual" if actual else "recommended" if recommended else "")
+    if kind not in {"actual", "recommended"}:
+        return []
+    origin = source_type or ("USER" if kind == "actual" else _source_type(lowered))
+    confirmed = kind == "actual" and any(marker in lowered for marker in _CHANGE_MARKERS)
+    facts: list[VehicleSpecFact] = []
+
+    tire = re.search(r"\b(\d{3}/\d{2}\s*[rR]\s*\d{2})\b", source)
+    if tire:
+        facts.append(VehicleSpecFact(
+            "tire_size", "Tire size", "wheels",
+            re.sub(r"\s+", "", tire.group(1)).upper(), kind, origin, confirmed,
+        ))
+    else:
+        rim = re.search(r"\b[Rr]\s?(1[2-9]|2[0-4])\b", source)
+        if rim:
+            facts.append(VehicleSpecFact(
+                "wheel_rim_size", "Wheel/rim size", "wheels",
+                f"R{rim.group(1)}", kind, origin, confirmed,
+            ))
+
+    pressure_context = any(
+        marker in lowered
+        for marker in ("колес", "шин", "wheel", "tire", "tyre", "перед", "front", "зад", "rear")
+    )
+    pressure_matches = list(re.finditer(
+        r"\b(\d(?:[.,]\d{1,2})?)\s*(bar|psi|бар)\b", source, re.IGNORECASE,
+    )) if pressure_context else []
+    axle_positions: list[tuple[int, str]] = []
+    for marker, axle in (("перед", "front"), ("front", "front"), ("зад", "rear"), ("rear", "rear")):
+        axle_positions.extend((found.start(), axle) for found in re.finditer(marker, lowered))
+    for index, match in enumerate(pressure_matches):
+        nearest_axle = min(
+            axle_positions,
+            key=lambda item: abs(item[0] - match.start()),
+            default=(0, ""),
+        )[1]
+        if nearest_axle == "front":
+            key, name = "tire_pressure_front", "Front tire pressure"
+        elif nearest_axle == "rear":
+            key, name = "tire_pressure_rear", "Rear tire pressure"
+        elif len(pressure_matches) == 2:
+            key, name = (
+                ("tire_pressure_front", "Front tire pressure")
+                if index == 0 else
+                ("tire_pressure_rear", "Rear tire pressure")
+            )
+        else:
+            key, name = "tire_pressure", "Tire pressure"
+        value = f"{match.group(1).replace(',', '.')} {match.group(2).lower().replace('бар', 'bar')}"
+        facts.append(VehicleSpecFact(key, name, "wheels", value, kind, origin, confirmed))
+
+    unique: dict[str, VehicleSpecFact] = {}
+    for fact in facts:
+        unique[fact.parameter_key] = fact
+    return list(unique.values())
+
+
 def extract_vehicle_spec_fact(text: str) -> VehicleSpecFact | None:
     source = " ".join(str(text or "").strip().split())
     lowered = source.lower()
@@ -73,15 +142,14 @@ def extract_vehicle_spec_fact(text: str) -> VehicleSpecFact | None:
     source_type = "USER" if actual else _source_type(lowered)
     confirmed_replacement = actual and any(marker in lowered for marker in _CHANGE_MARKERS)
 
+    wheel_facts = extract_wheel_spec_facts(source, value_kind=kind, source_type=source_type)
+    if wheel_facts:
+        return wheel_facts[0]
+
     viscosity = re.search(r"\b(\d{1,2}\s*[wW]\s*[- ]?\s*\d{2})\b", source)
     if viscosity and any(word in lowered for word in ("масл", "oil")):
         value = re.sub(r"\s+", "", viscosity.group(1)).upper()
         return VehicleSpecFact("engine_oil_viscosity", "Engine oil viscosity", "fluids", value, kind, source_type, confirmed_replacement)
-
-    tire = re.search(r"\b(\d{3}/\d{2}\s*[rR]\s*\d{2})\b", source)
-    if tire:
-        value = re.sub(r"\s+", "", tire.group(1)).upper()
-        return VehicleSpecFact("tire_size", "Tire size", "wheels", value, kind, source_type, confirmed_replacement)
 
     plugs = _part_value(
         source,
@@ -100,10 +168,6 @@ def extract_vehicle_spec_fact(text: str) -> VehicleSpecFact | None:
     brake_fluid = re.search(r"\b(DOT\s*(?:3|4|5(?:\.1)?))\b", source, re.IGNORECASE)
     if brake_fluid:
         return VehicleSpecFact("brake_fluid", "Brake fluid", "fluids", brake_fluid.group(1).upper().replace(" ", ""), kind, source_type, confirmed_replacement)
-
-    pressure = re.search(r"\b(\d(?:[.,]\d{1,2})?\s*(?:bar|psi|бар))\b", source, re.IGNORECASE)
-    if pressure and any(word in lowered for word in ("шин", "колес", "tire", "tyre")):
-        return VehicleSpecFact("tire_pressure", "Tire pressure", "wheels", pressure.group(1), kind, source_type, confirmed_replacement)
 
     capacity = re.search(r"\b(\d(?:[.,]\d{1,2})?\s*(?:л|l|liter|litre))\b", source, re.IGNORECASE)
     if capacity and any(word in lowered for word in ("масл", "oil")):

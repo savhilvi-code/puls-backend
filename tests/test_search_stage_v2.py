@@ -3,9 +3,43 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.services import search_stage_service as stages
+from app.services.link_service import sanitize_search_links
 
 
 class SearchStageV2Tests(unittest.TestCase):
+    def test_visual_links_reject_branding_and_preserve_relevant_source_page(self):
+        links = sanitize_search_links(
+            [
+                {"title": "PULS logo", "url": "https://pulscar.co/assets/img/puls-logo.png", "type": "image"},
+                {
+                    "title": "AL4 transmission dipstick photograph",
+                    "url": "https://cdn.example.com/al4-dipstick.jpg",
+                    "source_url": "https://forum.example.com/al4-level-check",
+                    "type": "image",
+                },
+                {"title": "Forum page", "url": "https://forum.example.com/al4-level-check", "type": "link"},
+            ],
+            query="Peugeot 307 AL4 transmission dipstick photograph",
+            visual_requested=True,
+        )
+
+        self.assertEqual([item["url"] for item in links], [
+            "https://cdn.example.com/al4-dipstick.jpg",
+            "https://forum.example.com/al4-level-check",
+        ])
+        self.assertEqual(links[0]["source_url"], "https://forum.example.com/al4-level-check")
+
+    def test_visual_source_page_survives_when_no_reliable_image_exists(self):
+        links = sanitize_search_links(
+            [
+                {"title": "favicon", "url": "https://example.com/favicon.png", "type": "image"},
+                {"title": "Manual level-check page", "url": "https://example.com/manual/al4", "type": "link"},
+            ],
+            query="AL4 level-check image",
+            visual_requested=True,
+        )
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["type"], "link")
     def test_sufficient_stage_one_stops_and_consumes_once(self):
         runner = AsyncMock(
             return_value={
@@ -232,6 +266,41 @@ class SearchStageV2Tests(unittest.TestCase):
         runner.assert_not_called()
         create_episode.assert_not_called()
         consume.assert_not_called()
+
+    def test_semantic_topic_change_disables_persisted_search_reuse(self):
+        persisted = {
+            "episode": {
+                "id": 77, "final_summary": "Old transmission answer",
+                "trigger_type": "REFERENCE", "search_context": {"reason": "transmission dipstick image"},
+            },
+            "runs": [], "sources": [],
+        }
+        runner = AsyncMock(return_value={
+            "parser_summary": "Wheel information",
+            "links": [{"title": "Wheel source", "url": "https://example.com/wheels"}],
+            "sufficient_evidence": True, "_raw": {},
+        })
+        with (
+            patch.object(stages, "can_run_research", return_value=(True, {})),
+            patch.object(stages.repo, "get_latest_problem_research", return_value=persisted) as latest,
+            patch.object(stages.repo, "create_search_episode", return_value={"id": 78}) as create_episode,
+            patch.object(stages.repo, "create_search_run", side_effect=lambda **kwargs: {"id": 1, **kwargs["payload"]}),
+            patch.object(stages.repo, "update_search_episode"),
+            patch.object(stages.repo, "upsert_source", return_value=None),
+            patch.object(stages.repo, "link_problem_source"),
+            patch.object(stages, "consume_research_credit", return_value={}),
+        ):
+            result = asyncio.run(stages.run_search_stages(
+                user_id=1, vehicle_id=10, problem_id=20, vehicle_label="Peugeot 307",
+                query="what wheels are stored for this car", language="en",
+                trigger_type="REFERENCE", allow_reuse=False, runner=runner,
+            ))
+
+        self.assertFalse(result.reused)
+        self.assertEqual(result.summary, "Wheel information")
+        latest.assert_not_called()
+        create_episode.assert_called_once()
+        runner.assert_awaited_once()
 
     def test_materially_new_same_problem_symptom_starts_new_episode(self):
         persisted = {

@@ -169,6 +169,7 @@ def _normalize_links(raw_links) -> list[dict]:
                     "url": str(item.get("url") or item.get("link") or ""),
                     "description": str(item.get("description") or item.get("key_info") or ""),
                     "type": str(item.get("type") or "link"),
+                    "source_url": str(item.get("source_url") or item.get("source_page_url") or ""),
                 }
             )
     return normalized

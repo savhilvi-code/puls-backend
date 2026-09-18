@@ -10,6 +10,7 @@ from app.services.parser_service import (
     parse_diagnostic,
 )
 from app.services.provider_config import get_search_provider
+from app.services.link_service import sanitize_search_links
 from app.services.subscription_service import (
     can_run_research,
     consume_research_credit,
@@ -300,17 +301,20 @@ def next_stage_reason(
 
 def _links_from_result(
     result: dict[str, Any],
+    *,
+    query: str = "",
+    visual_requested: bool = False,
 ) -> list[dict[str, Any]]:
     links = result.get("links")
 
     if not isinstance(links, list):
         return []
 
-    return [
+    return sanitize_search_links([
         item
         for item in links
         if isinstance(item, dict)
-    ]
+    ], query=query, visual_requested=visual_requested)
 
 
 def _summary_from_result(
@@ -522,6 +526,10 @@ def _links_from_persisted_sources(
                     or ""
                 ).strip(),
                 "type": str(source.get("source_type") or source.get("type") or "link").lower(),
+                "source_url": str(
+                    ((source.get("metadata") or {}) if isinstance(source.get("metadata"), dict) else {}).get("source_page_url")
+                    or ""
+                ).strip(),
             }
         )
     return _deduplicate_links(links)
@@ -531,6 +539,8 @@ def _result_from_persisted_research(
     state: dict[str, Any],
     *,
     quota: dict[str, Any] | None,
+    query: str = "",
+    visual_requested: bool = False,
 ) -> ResearchResult:
     episode = state.get("episode")
     runs = state.get("runs")
@@ -549,7 +559,11 @@ def _result_from_persisted_research(
     return ResearchResult(
         episode=episode if isinstance(episode, dict) else None,
         runs=runs,
-        links=_links_from_persisted_sources(state.get("sources")),
+        links=sanitize_search_links(
+            _links_from_persisted_sources(state.get("sources")),
+            query=query,
+            visual_requested=visual_requested,
+        ),
         summary=summary,
         evidence=evidence,
         sufficient=sufficient,
@@ -569,6 +583,7 @@ async def run_search_stages(
     problem_context: dict[str, Any] | None = None,
     conversation_id: str | None = None,
     trigger_type: str = "DIAGNOSTIC",
+    allow_reuse: bool = True,
     max_stages: int | None = None,
     runner: StageRunner = parse_diagnostic,
 ) -> ResearchResult:
@@ -588,7 +603,7 @@ async def run_search_stages(
             quota=subscription,
         )
 
-    if not _explicit_new_research_objective(query):
+    if allow_reuse and not _explicit_new_research_objective(query):
         persisted = repo.get_latest_problem_research(
             user_id=user_id,
             problem_id=problem_id,
@@ -605,6 +620,10 @@ async def run_search_stages(
             reused = _result_from_persisted_research(
                 persisted,
                 quota=subscription,
+                query=query,
+                visual_requested=bool(
+                    ((problem_context or {}).get("request") or {}).get("visual_requested")
+                ),
             )
             if reused.summary or reused.links or _has_useful_evidence(reused.evidence):
                 return reused
@@ -704,7 +723,11 @@ async def run_search_stages(
             error_message = str(exc)
 
         links = _links_from_result(
-            result
+            result,
+            query=query,
+            visual_requested=bool(
+                ((problem_context or {}).get("request") or {}).get("visual_requested")
+            ),
         )
 
         links = _deduplicate_links(

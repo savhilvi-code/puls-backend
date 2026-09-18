@@ -78,11 +78,28 @@ TURN_INTENT_JSON_SCHEMA = {
         },
         "visual_requested": {"type": "boolean"},
         "link_requested": {"type": "boolean"},
+        "continues_previous_request": {"type": "boolean"},
+        "topic_changed": {"type": "boolean"},
+        "vehicle_spec_action": {
+            "type": "string",
+            "enum": ["NONE", "LOOKUP", "SAVE"],
+        },
+        "vehicle_spec_keys": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "wheel_rim_size", "tire_size", "tire_pressure",
+                    "tire_pressure_front", "tire_pressure_rear",
+                ],
+            },
+        },
         "resolved_query": {"type": "string"},
     },
     "required": [
         "intent", "external_search", "source_preference", "visual_requested",
-        "link_requested", "resolved_query",
+        "link_requested", "continues_previous_request", "topic_changed", "vehicle_spec_action",
+        "vehicle_spec_keys", "resolved_query",
     ],
     "additionalProperties": False,
 }
@@ -95,6 +112,10 @@ class TurnIntent:
     source_preference: str = "ANY"
     visual_requested: bool = False
     link_requested: bool = False
+    continues_previous_request: bool = False
+    topic_changed: bool = False
+    vehicle_spec_action: str = "NONE"
+    vehicle_spec_keys: tuple[str, ...] = ()
     resolved_query: str = ""
 
 
@@ -138,7 +159,12 @@ async def classify_turn_intent(
                 "investigating a vehicle fault. external_search is true only when the user explicitly asks PULS "
                 "to search/find/check an external forum, manual, web source, link, real image/diagram, or when a "
                 "short follow-up continues such an unresolved request. Resolve elliptical follow-ups from the "
-                "compact history. resolved_query must be a concise standalone query preserving vehicle, component "
+                "compact history. Set continues_previous_request only when the new message retains the same technical "
+                "subject; a switch from transmission to wheels is not a continuation and sets topic_changed=true. "
+                "vehicle_spec_action is LOOKUP "
+                "when the user asks what is stored/installed, and SAVE only when the user explicitly asks to add or "
+                "update the vehicle profile. Select canonical vehicle_spec_keys without inventing values. "
+                "resolved_query must be a concise standalone query preserving vehicle, component "
                 "or procedure, source preference, visual intent and requested link; do not invent facts. "
                 "Return only JSON."
             ),
@@ -160,6 +186,10 @@ async def classify_turn_intent(
             source_preference=str(data.get("source_preference") or "ANY").upper(),
             visual_requested=bool(data.get("visual_requested")),
             link_requested=bool(data.get("link_requested")),
+            continues_previous_request=bool(data.get("continues_previous_request")),
+            topic_changed=bool(data.get("topic_changed")),
+            vehicle_spec_action=str(data.get("vehicle_spec_action") or "NONE").upper(),
+            vehicle_spec_keys=tuple(str(value) for value in (data.get("vehicle_spec_keys") or [])),
             resolved_query=str(data.get("resolved_query") or "").strip()[:1600],
         )
     except Exception:

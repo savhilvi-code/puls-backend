@@ -1376,6 +1376,10 @@ def upsert_source(
             description,
         )
 
+    source_page_url = str(source.get("source_url") or source.get("source_page_url") or "").strip()
+    if source_page_url:
+        metadata.setdefault("source_page_url", source_page_url)
+
     payload = {
         "source_type": _normalize_source_type(
             source.get("type")

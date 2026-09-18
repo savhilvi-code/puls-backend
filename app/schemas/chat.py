@@ -22,6 +22,7 @@ class LinkItem(BaseModel):
     url: str = ""
     description: str = ""
     type: str = "link"
+    source_url: str = ""
 
 
 class ChatResponse(BaseModel):
