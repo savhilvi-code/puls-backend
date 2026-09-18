@@ -359,17 +359,108 @@ def is_factual_technical_statement(text: str) -> bool:
         return False
     if DTC_PATTERN.search(source):
         return True
+    if (
+        any(lowered.startswith(marker) for marker in (
+            "особенно", "при этом", "также", "ещё", "еще", "на холод", "на горяч",
+            "после прогрев", "particularly", "especially", "also", "when cold", "when hot",
+        ))
+        and any(term in lowered for term in (
+            "передач", "скорост", "двигат", "мотор", "короб", "акпп", "тормоз",
+            "gear", "engine", "transmission", "brake",
+        ))
+    ):
+        return True
     factual_markers = (
         "не завод", "не запуск", "не едет", "не трог", "не тянет",
         "глох", "троит", "вибрац", "стук", "шум", "гул", "теч",
         "перегре", "горит", "ошиб", "чек", "рыв", "пина", "букс",
         "слом", "заменил", "заменили", "поменял", "отремонт", "не может",
+        "проверил", "проверили", "обслуж", "сделал то", "результат", "пробег",
         "переста", "только на холод", "только на горяч",
         "does not", "doesn't", "won't", "stalls", "misfire", "vibrat",
         "noise", "knock", "leak", "overheat", "warning", "replaced",
-        "repaired", "problem with", "проблема с",
+        "repaired", "checked", "serviced", "result", "mileage", "problem with", "проблема с",
     )
     return any(marker in lowered for marker in factual_markers)
+
+
+def is_problem_continuation(text: str) -> bool:
+    lowered = normalize_phrase(text).strip(" .,:;!?")
+    return any(lowered.startswith(marker) for marker in (
+        "особенно", "при этом", "также", "ещё", "еще", "дополнительно",
+        "а после", "а на", "на холод", "на горяч", "после прогрев",
+        "particularly", "especially", "also", "in addition", "when cold", "when hot",
+    ))
+
+
+def normalize_technical_symptom(text: str) -> str:
+    source = " ".join(str(text or "").strip().split()).strip(" ,;:-")
+    if not source or not is_factual_technical_statement(source):
+        return ""
+    source = re.sub(
+        r"^(?:у меня|на моей машине|мой автомобиль|my car|i have)\s+",
+        "",
+        source,
+        flags=re.IGNORECASE,
+    ).strip(" ,;:-")
+    return source[:1000]
+
+
+def _symptom_terms(text: str) -> set[str]:
+    stop = {
+        "после", "когда", "очень", "почти", "машина", "автомобиль",
+        "especially", "particularly", "after", "when", "vehicle",
+    }
+    words = {
+        "".join(char for char in part.lower() if char.isalnum())
+        for part in str(text or "").split()
+    }
+    return {word[:7] for word in words if len(word) >= 4 and word not in stop}
+
+
+def merge_problem_symptoms(existing: Any, incoming: str) -> list[str]:
+    symptoms = [
+        normalized
+        for item in (existing if isinstance(existing, list) else [])
+        if (normalized := normalize_technical_symptom(str(item or "")))
+    ]
+    symptom = normalize_technical_symptom(incoming)
+    if not symptom:
+        return symptoms
+    incoming_terms = _symptom_terms(symptom)
+    for index in range(len(symptoms) - 1, -1, -1):
+        current = symptoms[index]
+        if symptom.lower() == current.lower() or symptom.lower() in current.lower():
+            return symptoms
+        current_terms = _symptom_terms(current)
+        overlap = len(incoming_terms & current_terms) / max(1, min(len(incoming_terms), len(current_terms)))
+        if current.lower() in symptom.lower():
+            symptoms[index] = symptom
+            return symptoms
+        if is_problem_continuation(symptom) or overlap >= 0.4:
+            symptoms[index] = f"{current.rstrip(' .;')}; {symptom.lstrip(' ,;').lower()}"[:1000]
+            return symptoms
+    symptoms.append(symptom)
+    return symptoms
+
+
+def technical_event_type(text: str) -> str:
+    lowered = normalize_phrase(text)
+    if any(term in lowered for term in ("пробег", "mileage", "odometer")):
+        return "MILEAGE"
+    if any(term in lowered for term in ("проверил", "проверили", "проверка", "checked", "inspected", "tested")):
+        return "CHECK"
+    if any(term in lowered for term in ("результат", "после ремонта", "после замены", "result", "fixed", "resolved")):
+        return "RESULT"
+    if any(term in lowered for term in ("заменил", "заменили", "поменял", "replaced")):
+        if any(term in lowered for term in ("масл", "фильтр", "жидк", "oil", "filter", "fluid")):
+            return "SERVICE"
+        return "REPLACEMENT"
+    if any(term in lowered for term in ("отремонт", "ремонт", "repaired", "repair")):
+        return "REPAIR"
+    if any(term in lowered for term in ("обслуж", "сделал то", "service", "serviced")):
+        return "SERVICE"
+    return "SYMPTOM"
 
 
 def classify_problem(text: str) -> str:
@@ -650,14 +741,13 @@ def extract_technical_events(
         )
 
     if is_factual_technical_statement(source):
+        symptom = normalize_technical_symptom(source)
         events.append(
             {
-                "event_type": "SYMPTOM",
-                "title": classify_problem(
-                    source
-                ),
+                "event_type": technical_event_type(source),
+                "title": symptom[:160],
                 "details": {
-                    "source_text": source[:500],
+                    "source_text": symptom[:500],
                 },
                 "source_kind": "USER",
             }

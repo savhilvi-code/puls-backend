@@ -27,10 +27,13 @@ from app.services.v2_context import (
     extract_vehicle_label,
     has_automotive_content,
     is_factual_technical_statement,
+    is_problem_continuation,
     is_reference_request,
     is_social_general_text,
     looks_like_meta_question,
     plain_text_response,
+    merge_problem_symptoms,
+    normalize_technical_symptom,
     symptom_has_operating_detail,
     vehicle_label,
 )
@@ -176,6 +179,9 @@ def _problem_similarity(
             "component",
             "current_conclusion",
             "next_step",
+            "symptoms",
+            "conditions",
+            "confirmed_facts",
         )
     ).lower()
 
@@ -190,7 +196,8 @@ def _problem_similarity(
         score += 3
 
     for token in symptom.lower().split():
-        if len(token) >= 5 and token in blob:
+        token = "".join(char for char in token if char.isalnum())
+        if len(token) >= 4 and token[:7] in blob:
             score += 1
 
     return score
@@ -221,14 +228,21 @@ def resolve_relevant_problem(
         stored_class = str(
             (problem or {}).get("problem_class") or "OTHER"
         ).upper()
-        if (
-            problem
-            and problem_class not in {"OTHER", stored_class}
-            and stored_class not in {"", "OTHER"}
-        ):
+        if problem and problem_class not in {"OTHER", stored_class} and stored_class not in {"", "OTHER"}:
             return None
         if problem and stored_class == "OTHER" and problem_class != "OTHER":
-            return None
+            problem_blob = " ".join(str(problem.get(key) or "") for key in ("title", "symptoms", "conditions"))
+            if classify_problem(problem_blob) != problem_class and _problem_similarity(
+                problem, problem_class=problem_class, symptom=symptom,
+            ) < 1:
+                return None
+        if problem and problem_class == "OTHER" and stored_class != "OTHER":
+            if not (
+                is_problem_continuation(symptom)
+                or symptom_has_operating_detail(symptom)
+                or _problem_similarity(problem, problem_class=problem_class, symptom=symptom) >= 1
+            ):
+                return None
 
         return problem
 
@@ -261,7 +275,12 @@ def resolve_relevant_problem(
     if scored and scored[0][1] >= 2:
         best = scored[0][0]
         stored_class = str(best.get("problem_class") or "OTHER").upper()
-        if stored_class == problem_class or problem_class == "OTHER":
+        best_blob = " ".join(str(best.get(key) or "") for key in ("title", "symptoms", "conditions"))
+        if (
+            stored_class == problem_class
+            or problem_class == "OTHER"
+            or (stored_class == "OTHER" and classify_problem(best_blob) == problem_class)
+        ):
             return best
 
     if (
@@ -269,6 +288,9 @@ def resolve_relevant_problem(
         and len(candidates) == 1
         and problem_class == "OTHER"
     ):
+        return candidates[0]
+
+    if problem_class == "OTHER" and len(candidates) == 1 and is_problem_continuation(symptom):
         return candidates[0]
 
     return None
@@ -611,7 +633,7 @@ def _problem_payload(
         "title": title or symptom[:120],
         "problem_class": problem_class,
         "status": "OPEN",
-        "symptoms": [symptom],
+        "symptoms": [normalized] if (normalized := normalize_technical_symptom(symptom)) else [],
         "confirmed_facts": [],
         "hypotheses": [],
         "current_conclusion": (
@@ -765,6 +787,9 @@ async def process_chat_message_v2(
     elif has_automotive_content(text) or (
         _has_research_media_intent(text)
         and (explicit_problem_id or explicit_vehicle_id)
+    ) or (
+        is_problem_continuation(text)
+        and (explicit_problem_id or conversation_id or latest_problem)
     ):
         mode = "AUTOMOTIVE"
 
@@ -828,6 +853,11 @@ async def process_chat_message_v2(
             and (
                 str(conversation_problem.get("problem_class") or "").upper() == problem_class
                 or symptom_has_operating_detail(text)
+                or is_problem_continuation(text)
+                or (
+                    str(conversation_problem.get("problem_class") or "").upper() == "OTHER"
+                    and classify_problem(" ".join(str(conversation_problem.get(key) or "") for key in ("title", "symptoms", "conditions"))) == problem_class
+                )
             )
         ):
             problem = conversation_problem
@@ -1227,20 +1257,9 @@ async def process_chat_message_v2(
         context.problem = problem
 
     else:
-        current_symptoms = (
-            problem.get("symptoms")
-            if isinstance(
-                problem.get("symptoms"),
-                list,
-            )
-            else []
-        )
-
-        if text not in current_symptoms:
-            current_symptoms = [
-                *current_symptoms,
-                text,
-            ]
+        current_symptoms = merge_problem_symptoms(problem.get("symptoms"), text)
+        stored_class = str(problem.get("problem_class") or "OTHER").upper()
+        class_upgrade = stored_class == "OTHER" and problem_class != "OTHER"
 
         updated_problem = repo.save_problem(
             user_id=user.id,
@@ -1252,6 +1271,10 @@ async def process_chat_message_v2(
                     or "OPEN"
                 ),
                 "symptoms": current_symptoms,
+                **({
+                    "problem_class": problem_class,
+                    "title": " ".join((vehicle_label(vehicle), problem_class.replace("_", " ").title())).strip(),
+                } if class_upgrade else {}),
             },
         )
 
@@ -1343,16 +1366,15 @@ async def process_chat_message_v2(
         )
     )
 
-    if problem:
+    conclusion = str(research.summary or "").strip()
+    episode_trigger = str((getattr(research, "episode", None) or {}).get("trigger_type") or "DIAGNOSTIC").upper()
+    if problem and conclusion and episode_trigger == "DIAGNOSTIC":
         updated_problem = repo.save_problem(
             user_id=user.id,
             vehicle_id=vehicle.get("id"),
             problem_id=problem.get("id"),
             payload={
-                "current_conclusion": (
-                    research.summary
-                    or answer
-                ),
+                "current_conclusion": conclusion,
                 "status": "OPEN",
             },
         )

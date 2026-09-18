@@ -987,13 +987,40 @@ def create_vehicle_event(
     data["vehicle_id"] = vehicle_id
     data["problem_id"] = problem_id
 
+    event_type = str(data.get("event_type") or "").upper()
+    client = get_supabase_client()
+    if problem_id is not None and event_type == "SYMPTOM":
+        existing = _one(
+            client.table("vehicle_events")
+            .select("id")
+            .eq("vehicle_id", vehicle_id)
+            .eq("problem_id", problem_id)
+            .eq("event_type", "SYMPTOM")
+            .limit(1)
+            .execute()
+        )
+        if existing:
+            return None
+    if event_type == "DTC" and str(data.get("title") or "").strip():
+        duplicate = _one(
+            client.table("vehicle_events")
+            .select("id")
+            .eq("vehicle_id", vehicle_id)
+            .eq("event_type", "DTC")
+            .eq("title", data["title"])
+            .limit(1)
+            .execute()
+        )
+        if duplicate:
+            return None
+
     data.setdefault(
         "event_date",
         occurred_at or now_iso(),
     )
 
     return _one(
-        get_supabase_client()
+        client
         .table("vehicle_events")
         .insert(_clean_payload(data))
         .execute()
