@@ -68,6 +68,9 @@ class KnowledgeLibraryTests(unittest.TestCase):
         self.assertIn(("/admin/knowledge/library/items", "GET"), methods)
         self.assertIn(("/admin/knowledge/library/items", "POST"), methods)
         self.assertIn(("/admin/knowledge/library/items/{item_id}", "PATCH"), methods)
+        self.assertIn(("/admin/knowledge/library/items/{item_id}", "DELETE"), methods)
+        self.assertIn(("/admin/knowledge/library/vehicles/{vehicle_id}", "DELETE"), methods)
+        self.assertIn(("/admin/knowledge/library/successful-cases/{case_id}", "DELETE"), methods)
         with patch.object(admin, "require_admin", side_effect=HTTPException(status_code=403)) as require, patch.object(
             admin, "knowledge_catalog"
         ) as catalog:
@@ -75,6 +78,13 @@ class KnowledgeLibraryTests(unittest.TestCase):
                 asyncio.run(admin.admin_knowledge_catalog(object()))
         require.assert_called_once()
         catalog.assert_not_called()
+        with patch.object(admin, "require_admin", side_effect=HTTPException(status_code=403)) as require_delete, patch.object(
+            admin, "hard_delete_vehicle"
+        ) as delete_vehicle:
+            with self.assertRaises(HTTPException):
+                asyncio.run(admin.admin_delete_vehicle("vehicle-1", object()))
+        require_delete.assert_called_once()
+        delete_vehicle.assert_not_called()
 
     def test_manual_payload_uses_normalized_applicability_and_pending_review(self):
         with patch.object(library, "find_or_create_configuration", return_value={"id": "cfg-307"}):

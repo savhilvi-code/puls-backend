@@ -1,5 +1,12 @@
 # Task Log
 
+## 2026-09-19 — Admin hard delete and Storage audit
+
+- Added admin-only preview + hard-delete operations for Vehicles, Successful/User Cases, and Knowledge Materials. Every confirmation shows fresh related-record counts and the exact delete/detach/preserve effects.
+- Implemented post-delete verification and kept Archive separate. Shared `sources`, `problem_sources`, vehicle configurations, origin vehicle events, and Storage objects are never deleted as a side effect.
+- Audited production FK `ON DELETE` rules and both current Supabase Storage buckets read-only. Documented current vehicle photos, residual support images, browser-local service photos, external Knowledge/manual/video/image URLs, public/private status, retention, and consumers in `STORAGE_AUDIT.md`.
+- No schema, RLS, Storage bucket, policy, object, Search/provider logic, or ordinary My Car trash/restore behavior was changed.
+
 ## 2026-09-19 — Admin Knowledge Library V1
 
 - Added an admin-only Knowledge Library over the existing canonical `vehicle_configurations`, `knowledge_items`, `sources`, `knowledge_sources`, `problems`, and `fleet_events` relations; no schema migration or parallel storage architecture was introduced.

@@ -44,6 +44,14 @@ from app.services.knowledge_library_service import (
     review_candidate,
     update_material,
 )
+from app.services.admin_delete_service import (
+    delete_knowledge_material,
+    delete_successful_case,
+    delete_vehicle as hard_delete_vehicle,
+    preview_knowledge_delete,
+    preview_successful_case_delete,
+    preview_vehicle_delete,
+)
 
 
 router = APIRouter(
@@ -170,6 +178,42 @@ async def admin_update_knowledge_material(item_id: str, payload: KnowledgeMateri
 async def admin_archive_knowledge_material(item_id: str, request: Request) -> dict[str, Any]:
     require_admin(request)
     return archive_material(item_id)
+
+
+@router.get("/knowledge/library/items/{item_id}/delete-preview")
+async def admin_preview_knowledge_material_delete(item_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    return preview_knowledge_delete(item_id)
+
+
+@router.delete("/knowledge/library/items/{item_id}")
+async def admin_delete_knowledge_material(item_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    return delete_knowledge_material(item_id)
+
+
+@router.get("/knowledge/library/successful-cases/{case_id}/delete-preview")
+async def admin_preview_successful_case_delete(case_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    return preview_successful_case_delete(case_id)
+
+
+@router.delete("/knowledge/library/successful-cases/{case_id}")
+async def admin_delete_successful_case(case_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    return delete_successful_case(case_id)
+
+
+@router.get("/knowledge/library/vehicles/{vehicle_id}/delete-preview")
+async def admin_preview_vehicle_delete(vehicle_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    return preview_vehicle_delete(vehicle_id)
+
+
+@router.delete("/knowledge/library/vehicles/{vehicle_id}")
+async def admin_delete_vehicle(vehicle_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    return hard_delete_vehicle(vehicle_id)
 
 
 @router.get("/knowledge/library/problems")
