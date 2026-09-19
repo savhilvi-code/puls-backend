@@ -69,3 +69,9 @@ The Supabase service-role key is server-only and read from server environment va
 `/admin/knowledge/*` is a read-only observability API for canonical V2 data. Every route reuses `admin_accounts` authorization. Parent lists are paginated; conversation messages, search runs, and Problem Trace are loaded through parent-scoped endpoints so the browser never queries privileged Supabase tables directly or downloads the full dataset at startup.
 
 Dashboard counts and distributions are calculated independently so one unavailable table or auxiliary relation does not hide otherwise readable canonical data. Unavailable metrics are returned as `null` with an error map; the frontend must distinguish that state from a real zero.
+
+## Admin Knowledge Library
+
+`/admin/knowledge/library/*` is the admin-only management API for the existing global knowledge layer. It reuses `vehicle_configurations` for applicability, `knowledge_items` for structured knowledge and review status, `sources` plus `knowledge_sources` for provenance, and confirmed `fleet_events` as successful-case review candidates. General knowledge keeps a null `vehicle_configuration_id`.
+
+Mechanic review is stored separately from the preserved original-case snapshot in knowledge metadata. Archive is a recoverable metadata lifecycle marker; the UI does not hard-delete knowledge. The browser never receives service-role credentials, filtering and pagination remain server-side, and this interface does not alter chat, Search, Problems, Fleet promotion, or provider execution.

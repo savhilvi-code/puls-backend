@@ -13,6 +13,7 @@ class AdminInspectorTests(unittest.TestCase):
             route
             for route in app.routes
             if route.path.startswith("/admin/knowledge")
+            and not route.path.startswith("/admin/knowledge/library/")
         ]
 
         self.assertGreaterEqual(len(routes), 10)

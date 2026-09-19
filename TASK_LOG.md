@@ -1,5 +1,12 @@
 # Task Log
 
+## 2026-09-19 — Admin Knowledge Library V1
+
+- Added an admin-only Knowledge Library over the existing canonical `vehicle_configurations`, `knowledge_items`, `sources`, `knowledge_sources`, `problems`, and `fleet_events` relations; no schema migration or parallel storage architecture was introduced.
+- Added server-side catalog search, applicability filtering, pagination, material create/edit/archive, source provenance, structured Problems & Symptoms, Successful Case candidates, and Mechanic Review while preserving the original case snapshot.
+- Added Vehicles / General Knowledge navigation, A–Z catalog browsing, category counts, filters, material forms, Review Queue, provenance labels, and a guarded Upload File placeholder pending an approved private Storage bucket/policy.
+- Focused backend and mocked browser tests cover Manual, specific applicability, General Knowledge, Successful Case review, original-case isolation, make/model search, admin authorization, and existing Inspector/Live Flow regressions. No provider or production write tests were run.
+
 ## 2026-09-17 — Admin Data Inspector Block 2
 
 - Repaired the inspector against the production V2 write contract rather than the stale SQL reference: conversations use `context/started_at`, vehicles use `make/engine_code`, messages use `content/metadata`, events use `event_date/details/source_kind`, sources use `url`, and problem-source evidence uses the current canonical row shape.
