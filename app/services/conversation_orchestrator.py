@@ -1435,10 +1435,11 @@ async def process_chat_message_v2(
         ]
         if visual_requested and not image_links:
             if research.links:
+                source_url = str(research.links[0].get("url") or "").strip()
                 answer = (
-                    "Надёжный прямой URL изображения получить не удалось. Вот страница-источник, где доступен материал."
+                    f"Надёжный прямой URL изображения получить не удалось. Вот страница-источник: {source_url}"
                     if str(language or "").lower().startswith("ru") else
-                    "A reliable direct image URL was not retrieved. Here is the source page containing the material."
+                    f"A reliable direct image URL was not retrieved. Here is the source page: {source_url}"
                 )
             else:
                 answer = (

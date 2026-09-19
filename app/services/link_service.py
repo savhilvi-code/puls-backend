@@ -75,12 +75,33 @@ def sanitize_search_links(
         if len("".join(char for char in token if char.isalnum())) >= 4
     }
     result: list[dict] = []
+    retained_urls: set[str] = set()
+
+    def retain_source_page(item: dict) -> None:
+        source_url = str(item.get("source_url") or "").strip()
+        if (
+            not source_url
+            or source_url == str(item.get("url") or "").strip()
+            or source_url in retained_urls
+            or any(marker in source_url.lower() for marker in BRANDING_MARKERS)
+        ):
+            return
+        retained_urls.add(source_url)
+        result.append({
+            "title": "Source page" if is_branding_asset(item) else str(item.get("title") or "Source page").strip(),
+            "url": source_url,
+            "description": str(item.get("description") or "").strip(),
+            "type": "link",
+            "source_url": "",
+        })
+
     for item in normalized:
         image = str(item.get("type") or "").lower() in {"image", "photo", "picture"}
         if image:
             emit_event("IMAGE", module="link_service", operation="RESULT", from_node="Sources", to_node="Image Candidates", edge_label="CANDIDATE", output_data={**item, "state": "candidate"})
         if image and is_branding_asset(item):
             emit_event("IMAGE", module="link_service", operation="VERIFY", status="SKIPPED", from_node="Image Candidates", to_node="Rejected Images", edge_label="BRANDING_ASSET", output_data={**item, "state": "rejected", "reason": "branding_asset"})
+            retain_source_page(item)
             continue
         if image and visual_requested and query_terms:
             blob = " ".join(
@@ -89,10 +110,13 @@ def sanitize_search_links(
             )
             if not any(term in blob for term in query_terms):
                 emit_event("IMAGE", module="link_service", operation="VERIFY", status="SKIPPED", from_node="Image Candidates", to_node="Rejected Images", edge_label="QUERY_MISMATCH", output_data={**item, "state": "rejected", "reason": "query_mismatch"})
+                retain_source_page(item)
                 continue
         if image:
             emit_event("IMAGE", module="link_service", operation="VERIFY", from_node="Image Candidates", to_node="Selected Images", edge_label="SELECTED", output_data={**item, "state": "selected"})
-        result.append(item)
+        if item["url"] not in retained_urls:
+            retained_urls.add(item["url"])
+            result.append(item)
     return result
 
 

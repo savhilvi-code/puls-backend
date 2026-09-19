@@ -465,6 +465,7 @@ class BackendV2ConversationTests(unittest.TestCase):
 
         self.assertEqual(len(response.links), 1)
         self.assertEqual(response.links[0].url, "https://example.com/forum/thread")
+        self.assertIn("https://example.com/forum/thread", response.answer)
         self.assertNotIn(".png", response.answer)
         mocks["research"].assert_awaited_once()
         mocks["event"].assert_not_called()
@@ -536,6 +537,23 @@ class BackendV2ConversationTests(unittest.TestCase):
         self.assertIn("Сохранил", response.answer)
         mocks["event"].assert_not_called()
         mocks["save_problem"].assert_not_called()
+
+    def test_explicit_r16_save_persists_only_exact_rim_value(self):
+        decision = TurnIntent(
+            intent="REFERENCE", vehicle_spec_action="SAVE",
+            vehicle_spec_keys=("wheel_rim_size",),
+        )
+        response, mocks = self._run_chat(
+            "Внеси R16 в технические данные моей машины",
+            vehicles=[_vehicle()], semantic_intent=decision,
+        )
+        rows = mocks["specs_state"][VEHICLE_ID]["items"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["parameter_key"], "wheel_rim_size")
+        self.assertEqual(rows[0]["actual_value"], "R16")
+        self.assertNotIn("205/55", str(rows))
+        self.assertNotIn("pressure", str(rows).lower())
+        self.assertIn("Сохранил", response.answer)
 
     def test_wheel_specs_are_isolated_between_two_owned_vehicles(self):
         other_id = "55555555-5555-4555-8555-555555555555"

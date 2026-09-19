@@ -7,6 +7,22 @@ from app.services.link_service import sanitize_search_links
 
 
 class SearchStageV2Tests(unittest.TestCase):
+    def test_rejected_branding_image_keeps_source_page_fallback(self):
+        links = sanitize_search_links(
+            [{
+                "title": "PULS logo",
+                "url": "https://cdn.example.com/puls-logo.png",
+                "source_url": "https://forum.example.com/al4-level-check",
+                "type": "image",
+            }],
+            query="Peugeot AL4 level check location",
+            visual_requested=True,
+        )
+        self.assertEqual(links[0]["url"], "https://forum.example.com/al4-level-check")
+        self.assertEqual(links[0]["type"], "link")
+        self.assertEqual(links[0]["title"], "Source page")
+        self.assertNotIn("puls-logo", links[0]["url"])
+
     def test_visual_links_reject_branding_and_preserve_relevant_source_page(self):
         links = sanitize_search_links(
             [

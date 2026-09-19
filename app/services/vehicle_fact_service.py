@@ -24,13 +24,13 @@ class VehicleSpecFact:
 
 
 _CHANGE_MARKERS = (
-    "исправь", "измени", "замени", "укажи", "поставь", "запиши",
+    "исправь", "измени", "замени", "укажи", "поставь", "запиши", "внеси",
     "correct", "change", "replace", "set", "update",
 )
 _ACTUAL_MARKERS = (
     "у меня стоит", "у меня стоят", "у меня", "установлен", "установлены", "поставил",
     "поставлены", "залито", "использую", "лью", "фактически",
-    "installed", "fitted", "i use", "i have", "filled with", "actually uses",
+    "внеси", "installed", "fitted", "i use", "i have", "filled with", "actually uses",
 )
 _RECOMMENDED_MARKERS = (
     "рекомендуется", "рекомендовано", "по мануалу", "по руководству", "по каталогу",
